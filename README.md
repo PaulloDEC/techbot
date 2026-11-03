@@ -1,9 +1,7 @@
 # Techbot - An AI-Generated Enhanced PC Port of Duke Nukem
 
--------------------------------------------------------------------------
-AI Disclosure: Pretty much the entire project was created by Claude. 
-Widescreen-enhanced backdrop artwork is the primary exception.
--------------------------------------------------------------------------
+**AI Disclosure: Pretty much the entire project was created by Claude. 
+Widescreen-enhanced backdrop artwork is the primary exception.**
 
 Techbot (named after Dr. Proton's robot henchmen) is an enhanced PC port of
 Duke Nukem (1991), all three episodes, built on a complete decompilation of
