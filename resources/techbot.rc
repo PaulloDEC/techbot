@@ -1,0 +1,29 @@
+/* techbot.rc - Windows resources: the application icon and version details */
+#include <winver.h>
+
+1 ICON "techbot.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,0,0,0
+PRODUCTVERSION  1,0,0,0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "ProductName",      "Techbot"
+            VALUE "FileDescription",  "Techbot - An Enhanced PC Port of Duke Nukem"
+            VALUE "FileVersion",      "1.0.0"
+            VALUE "ProductVersion",   "1.0.0"
+            VALUE "InternalName",     "techbot"
+            VALUE "OriginalFilename", "techbot.exe"
+            VALUE "Comments",         "Requires the original Duke Nukem (1991) game files."
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
