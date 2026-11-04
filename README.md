@@ -1,7 +1,6 @@
 # Techbot - An Enhanced PC Port of Duke Nukem
 
-**AI Disclosure: Pretty much the entire project was created by Claude AI.  
-Widescreen-enhanced backdrop artwork is the primary exception.**
+**AI Disclosure: Pretty much the entire project was created by Claude AI. Widescreen-enhanced backdrop artwork is the primary exception.**
 
 ## The Human Bit
 
