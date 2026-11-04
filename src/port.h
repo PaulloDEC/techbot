@@ -16,6 +16,13 @@ enum { MODE_ORIGINAL = 0, MODE_ENHANCED = 1 };
 enum { SCALE_SHARP = 0, SCALE_NEAREST = 1 };
 enum { SND_ORIGINAL = 0, SND_OVERLAP = 1, SND_HIFI = 2 };
 enum { PAD_NONE = -1 };
+/* Aspect - Classic: the original 4:3 picture; Wide: the picture follows the
+ * window's shape.  HUD - Classic: the original border and status panel
+ * (widened in Wide); Immersive: the play area is the whole picture. */
+enum { ASPECT_CLASSIC = 0, ASPECT_WIDE = 1 };
+enum { HUD_CLASSIC = 0, HUD_IMMERSIVE = 1, HUD_IMMERSIVE_ALT = 2, HUD_OFF = 3 };
+/* (Immersive Alt: the same bar on a black band, the play area ending just
+ * above it instead of running on behind it.  Off: Immersive with no bar.) */
 enum { PADACT_UP, PADACT_DOWN, PADACT_LEFT, PADACT_RIGHT, PADACT_FIRE, PADACT_JUMP,
        PADACT_MENU, PADACT_BACK, PADACT_QSAVE, PADACT_QLOAD, PADACT_COUNT };
 
@@ -30,8 +37,10 @@ typedef struct {
     int pad[PADACT_COUNT]; /* SDL_GameControllerButton per action (PAD_NONE = unbound)  */
     int pad_alt[PADACT_COUNT]; /* optional second button per action                    */
     uint8_t key_qsave, key_qload; /* keyboard scancodes for quicksave / quickload        */
+    uint8_t key_hud;       /* in play: HUD Off <-> Immersive (or Immersive Alt)           */
     int smooth;            /* Enhanced mode in-between frames: 0 off, 30/60/120 fps, -1 = display rate */
-    int widescreen;        /* Enhanced mode: widen the play area to the window's shape     */
+    int widescreen;        /* Enhanced mode aspect: ASPECT_CLASSIC / ASPECT_WIDE             */
+    int hud;               /* Enhanced mode HUD: HUD_CLASSIC / HUD_IMMERSIVE / HUD_IMMERSIVE_ALT */
     int sound;             /* Enhanced mode: SND_ORIGINAL / SND_OVERLAP / SND_HIFI         */
     int episode;           /* 1..3: which DNx.EXE to start (the folder may hold all three) */
     int volume;            /* 0 = off .. 5 = full (Game setup > Sound volume)            */
@@ -103,6 +112,9 @@ void port_quickload(void);
 /* latched quicksave/quickload key press (set by the keyboard handler, taken by
  * the play loop): a press is never lost to a later key event in the same frame */
 extern volatile uint8_t port_qs_request;
+/* the HUD toggle key was pressed (latched like the quicksave keys) */
+extern volatile uint8_t port_hud_request;
+void port_toggle_hud(void);
 /* save-slot picker replacing "which game (1-9)?": returns slot 1..9, 0 = cancel */
 int  ui_pick_slot(int x, int saving);
 
@@ -156,12 +168,25 @@ int  dl_owns_screen(void);
  * actor sprites outside the original window are recorded for the renderer
  * but not written into EGA memory, which still provides the borders and the
  * status panel. */
-extern int dl_wide, dl_view_w, dl_hud;
-extern int port_act_left, port_act_right;
-void dl_set_view(int wide, int view_w);   /* platform: play-area width for this window */
+extern int dl_wide, dl_view_w, dl_view_h, dl_immersive, dl_hud;
+extern int port_act_left, port_act_right;     /* 8-px columns */
+extern int port_act_up, port_act_down;        /* map units (1/8 px) */
+extern int port_aud_left;                     /* the visible part of port_act_left (sounds) */
+/* platform: the play area for this window - wide or immersive, view_w x view_h
+ * pixels (Wide: x 160 between the borders; Immersive: x 200, the whole picture) */
+void dl_set_view(int wide, int view_w, int view_h);
 int  dl_view_offset(void);                /* x of the original 208-px view in the wide area */
+int  dl_view_offset_y(void);              /* y of the original 160-line view in the area   */
+int  dl_play_x0(void);                    /* where the play area starts in the picture     */
+int  dl_play_y0(void);
 int  dl_clip(int type, int x, int y, int wbytes);   /* 1: skip the EGA write */
 int  dl_frame_ready(void);                /* a recorded frame exists to compose from */
+
+/* ---------------------------------------------------------------- Immersive HUD
+ * port_hud.c: the slim bar along the bottom of an Immersive picture, filled
+ * from the original status panel in EGA memory ('base': the 320x200 page) */
+void hud_draw(uint8_t *out, int w, const uint8_t *base);
+int  hud_bar_top(void);                   /* first picture row the bar covers */
 
 /* ---------------------------------------------------------------- sound
  * port_sound.c: in Enhanced mode effects overlap (several voices) and can be

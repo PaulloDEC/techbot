@@ -203,17 +203,17 @@ static void wide_shot(void)
     if (getenv("WIDE_CHECK") && dl_compose_wide(1.0, 0, out, wide_w)) {
         /* centre of the wide picture vs the original window (backdrop pixels skipped) */
         static uint8_t ex[320 * 200];
-        long d = 0, n = 0, edge = 0; int x, y, ox = 16 + dl_view_offset();
+        long d = 0, n = 0, edge = 0; int x, y, ox = dl_play_x0() + dl_view_offset(), oy = dl_play_y0() + dl_view_offset_y();
         uint8_t bd[208 * 160];
         dl_backdrop(bd);
         ega_present_indexed(ex, ega_display_page);
         for (y = 16; y < 176; y++) for (x = 16; x < 224; x++) {
-            uint8_t a = out[y * wide_w + ox + x - 16], b = ex[y * 320 + x];
+            uint8_t a = out[(y - 16 + oy) * wide_w + ox + x - 16], b = ex[y * 320 + x];
             if (a == 16) continue;
             n++;
             if (a != b) { d++; if (x < 32 || x >= 208) edge++; }
         }
-        printf("widecheck frame %ld offset %d compared %ld differ %ld edge %ld\n", frame_no, ox - 16, n, d, edge);
+        printf("widecheck frame %ld offset %d,%d compared %ld differ %ld edge %ld\n", frame_no, ox - dl_play_x0(), oy - dl_play_y0(), n, d, edge);
     }
     if (k == n_wshots || !dl_compose_wide(1.0, 0, out, wide_w)) return;
     snprintf(name, sizeof name, "wide_%05ld.ppm", frame_no);
@@ -313,8 +313,20 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--pad-labels") && i + 1 < argc) { input_device = DEV_PAD; pad_style = atoi(argv[++i]); }
         else if (!strcmp(argv[i], "--present-sim") && i + 1 < argc) { psim_hz = atof(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.smooth = 1; }
         else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
-            wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = 1; cfg.smooth = 0;
-            dl_set_view(1, wide_w - 112);
+            wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = ASPECT_WIDE; cfg.hud = HUD_CLASSIC; cfg.smooth = 0;
+            dl_set_view(1, wide_w - 112, 160);
+        }
+        else if (!strcmp(argv[i], "--hud-off") && i + 1 < argc) {        /* Immersive without the bar */
+            wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = wide_w > 320; cfg.hud = HUD_OFF; cfg.smooth = 0;
+            dl_set_view(1, wide_w, 200);
+        }
+        else if (!strcmp(argv[i], "--immersive-alt") && i + 1 < argc) {   /* the same, play area above the bar */
+            wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = wide_w > 320; cfg.hud = HUD_IMMERSIVE_ALT; cfg.smooth = 0;
+            dl_set_view(1, wide_w, hud_bar_top());
+        }
+        else if (!strcmp(argv[i], "--immersive") && i + 1 < argc) {   /* picture width W, all play area */
+            wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = wide_w > 320; cfg.hud = HUD_IMMERSIVE; cfg.smooth = 0;
+            dl_set_view(1, wide_w, 200);
         }
         else if (!strcmp(argv[i], "--wideshot") && i + 1 < argc) {
             char *p = argv[++i];

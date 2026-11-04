@@ -162,6 +162,7 @@ void port_quickload(void)
          * had just been released, so the play loop doesn't save again */
         last_scancode = (uint8_t)(cfg.key_qsave | 0x80);
         dl_reset();
+        shots_spent_clear();             /* spent shots are not part of the snapshot */
     }
     free(globals); free(arena); free(planes);
     message(ok ? "Game loaded." : "Quicksave unusable.");

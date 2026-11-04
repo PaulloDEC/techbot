@@ -31,7 +31,9 @@
 #define WIN_H    160
 #define MAP_COLS 48          /* map cells kept around the view (wide views too) */
 #define VIEW_MAX 640         /* widest play area in pixels                       */
-#define MAP_ROWS 18          /* map rows kept: 5 above the view (mirror floors), 13 down */
+#define VIEW_HMAX 200        /* tallest play area (immersive: the whole screen)  */
+#define MAP_ROWS 20          /* map rows kept: 5 above the view (mirror floors), 15 down */
+#define MAP_H    1440        /* 90 rows */
 #define ABOVE    64          /* rows drawn above the window for mirror reflections */
 #define MAX_OPS  400
 #define SNAP_PX  48          /* camera moves larger than this are not slid     */
@@ -71,21 +73,27 @@ static int dlgd, dgx0, dgy0, dgx1, dgy1;     /* ... of which dialogs and text (s
 int port_in_play;
 uint8_t dl_group;
 
-int dl_wide, dl_view_w = WIN_W, dl_hud;
+int dl_wide, dl_view_w = WIN_W, dl_view_h = WIN_H, dl_immersive, dl_hud;
 int dl_ext_bd2;                     /* the platform draws the second backdrop (index 17) */
-int port_act_left, port_act_right;
+int port_act_left, port_act_right, port_act_up, port_act_down, port_aud_left;
 
 static int smooth_on(void) { return cfg.smooth != 0 && cfg.mode == MODE_ENHANCED; }
 /* recording runs whenever the port draws the play area itself */
-int dl_active(void) { return cfg.mode == MODE_ENHANCED && (cfg.smooth != 0 || cfg.widescreen); }
+int dl_active(void) { return cfg.mode == MODE_ENHANCED && (cfg.smooth != 0 || cfg.widescreen || cfg.hud); }
 
-void dl_set_view(int wide, int view_w)
+void dl_set_view(int wide, int view_w, int view_h)
 {
-    dl_wide = wide && cfg.widescreen && cfg.mode == MODE_ENHANCED;
+    dl_wide = wide && (cfg.widescreen || cfg.hud) && cfg.mode == MODE_ENHANCED;
+    dl_immersive = dl_wide && cfg.hud != HUD_CLASSIC && view_h > WIN_H;
     if (view_w > VIEW_MAX) view_w = VIEW_MAX;
+    if (view_h > VIEW_HMAX) view_h = VIEW_HMAX;
     dl_view_w = dl_wide && view_w > WIN_W ? view_w : WIN_W;
-    if (!dl_wide) port_act_left = port_act_right = 0;
+    dl_view_h = dl_immersive ? view_h : WIN_H;
+    if (!dl_wide) port_act_left = port_act_right = port_aud_left = 0;
+    if (!dl_immersive) port_act_up = port_act_down = 0;
 }
+int dl_play_x0(void) { return dl_immersive ? 0 : WIN_X0; }
+int dl_play_y0(void) { return dl_immersive ? 0 : WIN_Y0; }
 
 /* the display camera: the wide area centred on the game's view, stopped at
  * the map's edges (128 tiles = 2048 px) */
@@ -95,6 +103,32 @@ static int disp_cam(int cam_x)
     if (x > 2048 - dl_view_w) x = 2048 - dl_view_w;
     if (x < 0) x = 0;
     return x;
+}
+/* ... and vertically (immersive: a taller area, centred the same way and
+ * stopped at the top and bottom of the map - but never so far that part of
+ * the game's own view would be cut off) */
+/* rows of the taller area above the game's own view: centred in the part
+ * the Immersive HUD bar leaves visible, so nothing the original showed is
+ * ever behind the bar (the extra rows below it are) */
+int hud_bar_top(void);
+static int view_above(void)
+{
+    int extra = dl_view_h - WIN_H, a;
+    if (extra <= 0) return 0;
+    /* (no bar: centred in the whole area) */
+    a = ((cfg.hud == HUD_OFF ? dl_view_h : hud_bar_top()) - WIN_H) / 2;
+    return a < 0 ? 0 : a > extra ? extra : a;
+}
+static int disp_cam_y(int cam_y)
+{
+    int y, extra = dl_view_h - WIN_H;
+    if (extra <= 0) return cam_y;
+    y = cam_y - view_above();
+    if (y > MAP_H - dl_view_h) y = MAP_H - dl_view_h;
+    if (y < 0) y = 0;
+    if (y > cam_y) y = cam_y;
+    if (y < cam_y - extra) y = cam_y - extra;
+    return y;
 }
 /* the frame widescreen composes from: the last finished one or, before any
  * frame has finished (a popup in the first frame of a level or after a
@@ -106,6 +140,7 @@ static Frame *view_frame(void)
     return NULL;
 }
 int dl_view_offset(void) { Frame *f = view_frame(); return f ? f->cam_x - disp_cam(f->cam_x) : (dl_view_w - WIN_W) / 2; }
+int dl_view_offset_y(void) { Frame *f = view_frame(); return f ? f->cam_y - disp_cam_y(f->cam_y) : view_above(); }
 int dl_frame_ready(void) { return dl_active() && view_frame() != NULL; }
 unsigned dl_serial(void) { return serial; }
 
@@ -125,13 +160,33 @@ void dl_begin_frame(void)
     rec->valid = 1; rec->dirty = 0; rec->has_world = 0; rec->nops = 0;
     dl_capturing = 1;
     direct = 0; dlgd = 0;
-    /* widescreen: the activity window covers the visible area (8-px columns) */
+    /* widescreen: the activity window covers the visible area (8-px columns)
+     * plus a margin.  An object's position is its left (and lowest) piece:
+     * the original's window starts exactly at its left edge, so an object
+     * half off the left side is not drawn at all and pops in - at the edge
+     * of a large screen that shows, so here objects are woken a tile early */
     if (dl_wide) {
         int cx = scroll_x * 8, d = disp_cam(cx);
-        port_act_left = (cx - d + 7) / 8;
-        port_act_right = (d + dl_view_w - (cx + WIN_W) + 7) / 8;
-    } else port_act_left = port_act_right = 0;
+        port_act_left = (cx - d + 7) / 8 + 2;
+        port_aud_left = port_act_left - 2;
+        port_act_right = (d + dl_view_w - (cx + WIN_W) + 7) / 8;   /* (the original has 3 columns spare) */
+    } else port_act_left = port_act_right = port_aud_left = 0;
+    /* immersive: and the rows above and below it (map units, 8 per pixel),
+     * with the same margin above (the original's half tile, made a tile) and
+     * two tiles below, where tall objects' upper pieces show first */
+    if (dl_immersive) {
+        int cy = (scroll_y >> 7) * 16, d = disp_cam_y(cy);
+        port_act_up = (cy - d) * 8 + 0x40;
+        port_act_down = (d + dl_view_h - (cy + WIN_H)) * 8 + 0x100;
+    } else port_act_up = port_act_down = 0;
 }
+
+/* A sprite's line as the original computes it: some routines take the
+ * height above the view as an unsigned 16-bit difference, so an object just
+ * above the window gets a line near 8192 - which lands in the right place
+ * only because the original's 16-bit screen offsets wrap.  Here it becomes
+ * the negative line it stands for. */
+static int real_line(int y) { return y >= 0x1000 ? y - 0x2000 : y; }
 
 int dl_clip(int type, int x, int y, int wbytes)
 {
@@ -142,8 +197,12 @@ int dl_clip(int type, int x, int y, int wbytes)
     /* any row: an object's lower pieces can start below the play area, and a
      * negative column there wraps into the status panel's corner */
     if (!dl_wide || !port_in_play || dl_hud || (type != DL_SPRITE && type != DL_MIRROR)) return 0;
-    (void)y;
-    return x < 2 || x + wbytes > 28;
+    if (x < 2 || x + wbytes > 28) return 1;
+    /* immersive: actors above and below the original window are active too;
+     * anything the original could not have drawn there (it draws objects from
+     * half a tile above the window down to its bottom) is the renderer's alone */
+    if (dl_immersive) { y = real_line(y); return y < 8 || y >= WIN_Y0 + WIN_H; }
+    return 0;
 }
 
 /* rectangles in play-window pixels, clamped to the original 208 x 160 view */
@@ -202,7 +261,7 @@ void dl_world(void)
     rec->cam_x = cam_x_now(); rec->cam_y = cam_y_now();
     rec->anim = anim_tick;
     rec->c0 = (disp_cam(rec->cam_x) >> 4) - 4;
-    rec->r0 = (scroll_y >> 7) - 5;
+    rec->r0 = (disp_cam_y(rec->cam_y) >> 4) - 5;
     for (r = 0; r < MAP_ROWS; r++)
         for (c = 0; c < MAP_COLS; c++) {
             int mr = rec->r0 + r, mc = rec->c0 + c;
@@ -215,7 +274,7 @@ void dl_record(int type, const uint8_t *src, uint16_t tile, int col, int line, i
 {
     Op *o;
     int sx = col * 8, w = (type == DL_GLYPH || type == DL_GLYPH_OPAQUE) ? 8 : 16;
-    int left = WIN_X0, right = WIN_X0 + WIN_W;
+    int left = WIN_X0, right = WIN_X0 + WIN_W, top = WIN_Y0, bottom = WIN_Y0 + WIN_H;
     if (!dl_capturing || dl_in_world || dl_hud || rec->nops >= MAX_OPS) return;
     /* only what goes onto the page being built: popups (hints, level notes,
      * menus) are drawn onto the page on screen, over the game, and vanish when
@@ -224,9 +283,14 @@ void dl_record(int type, const uint8_t *src, uint16_t tile, int col, int line, i
     if (dl_wide && (type == DL_SPRITE || type == DL_MIRROR)) {   /* the wide play area */
         int off = cam_x_now() - disp_cam(cam_x_now());
         left -= off; right += dl_view_w - WIN_W - off;
+        if (dl_immersive) {
+            int offy = cam_y_now() - disp_cam_y(cam_y_now());
+            top -= offy; bottom += dl_view_h - WIN_H - offy;
+        }
     }
+    if (type == DL_SPRITE || type == DL_MIRROR) line = real_line(line);
     /* only what lands in the play area (the status panel is left alone) */
-    if (sx + w <= left || sx >= right || line + 16 <= WIN_Y0 || line >= WIN_Y0 + WIN_H) return;
+    if (sx + w <= left || sx >= right || line + (type == DL_MIRROR ? 32 : 16) <= top || line >= bottom) return;
     o = &rec->ops[rec->nops++];
     o->type = (uint8_t)type; o->group = dl_group; o->src = src; o->tile = tile; o->back = (int16_t)back;
     o->match = -1; o->drawn = 0;
@@ -312,7 +376,7 @@ void dl_end_frame(void)
         int i;
         rec->mirror_top = 0;
         for (i = 0; i < rec->nops; i++)
-            if (rec->ops[i].type == DL_MIRROR && rec->ops[i].wy - rec->cam_y < 61) rec->mirror_top = 1;
+            if (rec->ops[i].type == DL_MIRROR && rec->ops[i].wy - disp_cam_y(rec->cam_y) < 61) rec->mirror_top = 1;
     }
     if (rec->valid && cur->valid) match_ops(cur, rec);
     t = prev; prev = cur; cur = rec; rec = t;
@@ -320,9 +384,10 @@ void dl_end_frame(void)
 }
 
 /* ---------------------------------------------------------------- drawing */
-static uint8_t winbuf[ABOVE + WIN_H][VIEW_MAX];
+static uint8_t winbuf[ABOVE + VIEW_HMAX][VIEW_MAX];
 #define win (winbuf + ABOVE)        /* win[y], y from -ABOVE (above the window) */
 static int view_w = WIN_W;          /* width being drawn                        */
+static int view_h = WIN_H;          /* height being drawn                       */
 static int wide_backdrop;           /* backdrop-1 pixels left as index 16       */
 
 /* a + (b - a) * t, rounded to the nearest pixel the same way in both directions */
@@ -337,12 +402,13 @@ static int tile_pixel(uint16_t off, int x, int y)
 }
 
 /* backdrop pixel at play-area position (px,py): fixed to the screen, 13 x 10
- * tiles; a wider area stretches it horizontally */
+ * tiles; a wider (taller) area stretches it to fill */
 static int backdrop_pixel(uint16_t cache, int px, int py)
 {
-    int bx = view_w == WIN_W ? px : px * WIN_W / view_w;
-    if (py < 0) py += WIN_H;                  /* above the window (reflections only) */
-    return tile_pixel((uint16_t)(cache + (((py >> 4) * 13 + (bx >> 4)) << 5)), bx & 15, py & 15);
+    int bx = view_w == WIN_W ? px : px * WIN_W / view_w, by;
+    if (py < 0) py += view_h;                 /* above the window (reflections only) */
+    by = view_h == WIN_H ? py : py * WIN_H / view_h;
+    return tile_pixel((uint16_t)(cache + (((by >> 4) * 13 + (bx >> 4)) << 5)), bx & 15, by & 15);
 }
 
 void dl_backdrop(uint8_t *out)
@@ -356,7 +422,7 @@ void dl_backdrop(uint8_t *out)
 static void draw_map(const Frame *f, int cx, int cy)
 {
     int px, py;
-    for (py = f->mirror_top ? -ABOVE : 0; py < WIN_H; py++) {
+    for (py = f->mirror_top ? -ABOVE : 0; py < view_h; py++) {
         int wy = cy + py, mr = (wy >> 4) - f->r0;
         for (px = 0; px < view_w; px++) {
             int wx = cx + px, mc = (wx >> 4) - f->c0;
@@ -373,7 +439,7 @@ static void draw_map(const Frame *f, int cx, int cy)
     }
 }
 
-static void plot(int x, int y, int c) { if (x >= 0 && x < view_w && y >= -ABOVE && y < WIN_H) win[y][x] = (uint8_t)c; }
+static void plot(int x, int y, int c) { if (x >= 0 && x < view_w && y >= -ABOVE && y < view_h) win[y][x] = (uint8_t)c; }
 
 /* 5-byte groups per 8 pixels: mask (1 = opaque), then planes 0..3 */
 static void draw_masked(const uint8_t *src, int bytes_w, int rows, int x, int y, int opaque)
@@ -407,7 +473,7 @@ static void mirror_at(int x, int y, int back)
     int k, c;
     for (k = 0; k < 30; k++) {
         int dy = y + 2 + k, sy = y - 1 - back / 40 - 2 * k;
-        if (dy < 0 || dy >= WIN_H || sy < -ABOVE || sy >= WIN_H) continue;
+        if (dy < 0 || dy >= view_h || sy < -ABOVE || sy >= view_h) continue;
         for (c = 0; c < 16; c++) if (x + c >= 0 && x + c < view_w) win[dy][x + c] = win[sy][x + c];
     }
 }
@@ -416,15 +482,16 @@ static void mirror_at(int x, int y, int back)
  * its own positions when 'glide' is 0) into win[][] at width view_w */
 static void render_view(double alpha, int glide)
 {
-    int cx, cy, dcx, i;
+    int cx, cy, dcx, dcy, i;
     if (glide) {
         cx = lerp_px(prev->cam_x, cur->cam_x, alpha);
         cy = lerp_px(prev->cam_y, cur->cam_y, alpha);
     } else { cx = cur->cam_x; cy = cur->cam_y; alpha = 1.0; }
     dcx = view_w == WIN_W ? cx : disp_cam(cx);
+    dcy = view_h == WIN_H ? cy : disp_cam_y(cy);
     dl_dbg_cx = cx; dl_dbg_cy = cy; dl_dbg_obj = -9999;
     {   static int checked; if (!checked) { checked = 1; jumplog = getenv("DL_JUMPLOG") != NULL; } }
-    draw_map(cur, dcx, cy);
+    draw_map(cur, dcx, dcy);
     for (i = 0; i < cur->nops; i++) {
         const Op *o = &cur->ops[i];
         int wx = o->wx, wy = o->wy, sx, sy;
@@ -439,8 +506,8 @@ static void render_view(double alpha, int glide)
         /* text drawn as part of a frame is fixed to the screen: like the game's
          * boxes, it keeps its place in the original window, which widescreen
          * centres in the wide area (see dl_compose_wide) */
-        if (o->type == DL_GLYPH || o->type == DL_GLYPH_OPAQUE) { sx = wx + (view_w - WIN_W) / 2; sy = wy; }
-        else { sx = wx - dcx; sy = wy - cy; }
+        if (o->type == DL_GLYPH || o->type == DL_GLYPH_OPAQUE) { sx = wx + (view_w - WIN_W) / 2; sy = wy + (view_h == WIN_H ? 0 : view_above()); }
+        else { sx = wx - dcx; sy = wy - dcy; }
         if (dl_dbg_obj == -9999 && o->group == 0x80) dl_dbg_obj = wx;     /* Duke, world x */
         /* test aid: jump of this object since the last refresh of the previous step */
         if (jumplog && glide && o->match >= 0 && !o->drawn && prev->ops[o->match].drawn &&
@@ -475,7 +542,7 @@ int dl_render(double alpha, uint8_t *idx)
     int y;
     if (!smooth_on() || !cur->valid || cur->dirty) return 0;
     if (alpha < 0) alpha = 0;
-    view_w = WIN_W; wide_backdrop = 0;
+    view_w = WIN_W; view_h = WIN_H; wide_backdrop = 0;
     if (!can_glide(alpha)) {
         /* show the exact frame - unless it has a mirror reflecting from above
          * the window, which the port draws differently: switching between the
@@ -493,14 +560,14 @@ int dl_render_wide(double alpha, uint8_t *dst, int stride)
     Frame *f = view_frame();
     if (!dl_active() || !f) return 0;
     if (alpha < 0) alpha = 0;
-    view_w = dl_view_w; wide_backdrop = 1;
+    view_w = dl_view_w; view_h = dl_view_h; wide_backdrop = 1;
     if (f == cur) render_view(alpha, can_glide(alpha));
     else {                                       /* first frame: no previous one to glide from */
         Frame *save = cur;
         cur = f; render_view(1.0, 0); cur = save;
     }
-    for (y = 0; y < WIN_H; y++) memcpy(dst + y * stride, win[y], (size_t)view_w);
-    view_w = WIN_W; wide_backdrop = 0;
+    for (y = 0; y < view_h; y++) memcpy(dst + y * stride, win[y], (size_t)view_w);
+    view_w = WIN_W; view_h = WIN_H; wide_backdrop = 0;
     return f->dirty ? 3 : 1;
 }
 
@@ -584,15 +651,27 @@ int dl_torn_blocks(int *checked)
 int port_level_intro;
 int dl_wide_shown;                  /* a wide frame was shown since the play screen went up */
 
+/* the Immersive HUD bar; with a play area shorter than the picture
+ * (Immersive Alt) the band below it is black (palette slot 0, as the
+ * original's own black - it takes part in fades and flashes the same way) */
+static void hud_band(uint8_t *out, int w, const uint8_t *base)
+{
+    if (cfg.hud == HUD_OFF) return;
+    if (dl_view_h < 200) memset(out + dl_view_h * w, 0, (size_t)((200 - dl_view_h) * w));
+    hud_draw(out, w, base);
+}
+
 int dl_compose_wide(double alpha, int overlay, uint8_t *out, int w)
 {
     static uint8_t base[320 * 200];
-    int wp = w - 112, x, y, r, intro = 0;
+    int wp = dl_immersive ? w : w - 112, x, y, r, intro = 0;
+    int px0 = dl_play_x0(), py0 = dl_play_y0(), ph = dl_view_h;
     if (wp != dl_view_w) return 0;
     if (dl_frame_ready()) port_level_intro = 0;          /* the level is drawn: the usual way */
     else if (port_level_intro && dl_active() && dl_wide) intro = 1;
     else return 0;
     ega_present_indexed(base, ega_display_page);
+    if (!dl_immersive)                  /* immersive: no border, no status panel */
     for (y = 0; y < 200; y++) {
         uint8_t *o = out + y * w, *b = base + y * 320;
         memcpy(o, b, 16);
@@ -608,18 +687,21 @@ int dl_compose_wide(double alpha, int overlay, uint8_t *out, int w)
             memcpy(o + 16 + wp / 2 - 32, b + 88, 64);
         }
     }
+    /* the original window centred in the play area: where screen-fixed things
+     * (dialog boxes, their text) keep their exact place relative to it */
+    {
+        int ocx = px0 + (wp - WIN_W) / 2, ocy = py0 + (dl_immersive ? view_above() : (ph - WIN_H) / 2);
     if (intro) {
         /* before the level's first frame: the play area is still empty
          * (black, as in the original) apart from what the game drew in its
          * window - the "Get ready" box - which goes in the middle */
-        int ox = 16 + (wp - WIN_W) / 2;
-        for (y = 16; y < 176; y++) {
-            memset(out + y * w + 16, 0, (size_t)wp);
-            memcpy(out + y * w + ox, base + y * 320 + 16, WIN_W);
-        }
+        for (y = 0; y < ph; y++) memset(out + (py0 + y) * w + px0, 0, (size_t)wp);
+        for (y = 0; y < WIN_H; y++)
+            memcpy(out + (ocy + y) * w + ocx, base + (WIN_Y0 + y) * 320 + WIN_X0, WIN_W);
+        if (dl_immersive) hud_band(out, w, base);     /* (the panel shows during "Get ready" too) */
         return 1;
     }
-    r = dl_render_wide(alpha, out + 16 * w + 16, w);
+    r = dl_render_wide(alpha, out + py0 * w + px0, w);
     if (!r) return 0;
     dl_wide_shown = 1;
     /* lay over only what the game drew itself: dialog boxes and text (this
@@ -630,23 +712,24 @@ int dl_compose_wide(double alpha, int overlay, uint8_t *out, int w)
          * directly) goes where the original view sits over the level; dialog
          * boxes and their text - screen-fixed in the original, which draws them
          * across its play window - go in the original window centred in the
-         * wide area, so they keep their exact place relative to it (rows are
-         * unchanged: the play area is as tall as the original's). */
-        int ow = 16 + dl_view_offset(), oc = 16 + (wp - WIN_W) / 2;
+         * play area, so they keep their exact place relative to it. */
+        int ow = px0 + dl_view_offset(), owy = py0 + dl_view_offset_y();
         /* (a finished frame's popups are gone from the screen by now: only a
          * popup being shown right now, or direct drawing, is laid over) */
         if (direct) {                                    /* the level's own drawing first */
             for (y = ddy0; y < ddy1; y++)
-                memcpy(out + (y + 16) * w + ow + ddx0, base + (y + 16) * 320 + 16 + ddx0, (size_t)(ddx1 - ddx0));
+                memcpy(out + (y + owy) * w + ow + ddx0, base + (y + WIN_Y0) * 320 + WIN_X0 + ddx0, (size_t)(ddx1 - ddx0));
         }
         if (overlay && dl_capturing && rec->dirty) {
             for (y = rec->dy0; y < rec->dy1; y++)
-                memcpy(out + (y + 16) * w + oc + rec->dx0, base + (y + 16) * 320 + 16 + rec->dx0, (size_t)(rec->dx1 - rec->dx0));
+                memcpy(out + (y + ocy) * w + ocx + rec->dx0, base + (y + WIN_Y0) * 320 + WIN_X0 + rec->dx0, (size_t)(rec->dx1 - rec->dx0));
         }
         if (dlgd) {
             for (y = dgy0; y < dgy1; y++)
-                memcpy(out + (y + 16) * w + oc + dgx0, base + (y + 16) * 320 + 16 + dgx0, (size_t)(dgx1 - dgx0));
+                memcpy(out + (y + ocy) * w + ocx + dgx0, base + (y + WIN_Y0) * 320 + WIN_X0 + dgx0, (size_t)(dgx1 - dgx0));
         }
     }
+    }
+    if (dl_immersive) hud_band(out, w, base);         /* the Immersive HUD bar (port_hud.c) */
     return 1;
 }

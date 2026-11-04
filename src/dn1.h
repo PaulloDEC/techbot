@@ -142,6 +142,8 @@ void sound_load_bank(const char *a, const char *b);
 
 /* helpers (game.c) */
 int  offscreen(int x, int y);                    /* 3266E */
+int  unheard(int x, int y);                      /* (port) offscreen() for sounds */
+void shots_spent_clear(void);                    /* (port) see update_shots */
 int  solid_at(int x, int y);                     /* 3714  */
 int  player_touches(int x, int y);               /* 3513  */
 int  player_in_span(int x0, int x1, int y);      /* 35EE  */

@@ -268,9 +268,20 @@ Dialogs and large jumps (respawn, teleport) are shown without smoothing.
 Smoothing shows each update with up to one update (~60 ms) of extra delay;
 switch it off if you prefer the most immediate response.
 
-### Widescreen (Enhanced mode)
+### Aspect and HUD (Enhanced mode)
 
-With *Game mode = Enhanced* and *Widescreen = On*, the play area widens to
+Two independent settings in *Options*:
+
+| Setting | Classic | Wide / Immersive |
+|---|---|---|
+| Aspect | the original 4:3 picture | the picture follows the window's shape (up to about 2.4:1) |
+| HUD | the original border and status panel | Immersive: the play area is the whole picture - no border, no status panel, a slim bar along the bottom laid over the play - with the view extended above and below as well as to the sides.  Immersive Alt: the same, but the play area ends just above the bar, which sits on a black band.  Off: Immersive with no bar at all.  In play, **Tab** (Options > Keyboard > HUD toggle) switches between Off and the Immersive HUD last used |
+
+Any combination works: Wide + Classic HUD is the widened original screen
+described next; Classic aspect + Immersive HUD is a 4:3 screen that is all
+play area.
+
+**Wide aspect, Classic HUD.**  The play area widens to
 the window's shape (resize the window or go fullscreen; up to about 2.4:1).
 The left border stays on the left, the status panel stays on the right, the
 top and bottom borders are extended with their own plain sections (the
@@ -282,8 +293,31 @@ window, which is centred in the wide play area (so near a map edge they stay
 centred rather than following the original view to one side); their rows are
 the original's, as the play area is just as tall.
 Enemies in the extra space are active - the activity window widens with the
-view - which is a (small) gameplay change, hence Enhanced only.  Menus,
-story pages and pictures are shown in 4:3 with black bars.
+view, plus a tile's margin so objects never pop in at the edge - which is a
+(small) gameplay change, hence Enhanced only.  Menus, story pages and
+pictures are shown in 4:3 with black bars (or behind replacement art).
+
+**Immersive HUD bar.**  Along the bottom: health, score, pistol and
+firepower, keys and inventory, in the 320-pixel bar from `resources/hud/`
+(centred in a wide picture).  Its contents are copied from the original
+status panel, which the game still draws, so it always shows what the panel
+would; the firepower meter is one of `gun_power_1..4.png`.  The art is built
+into the program: after changing a PNG there, run
+`python tools/make_hud.py` (regenerates `src/hud_data.h`) and rebuild.  Every
+opaque pixel must be one of the 16 EGA colours (so the bar fades with the
+game).  The game's own view is centred in the part of the screen above the
+bar, so nothing the original showed is ever behind it.
+
+**Immersive HUD.**  The whole picture (320 x 200 in Classic aspect, or the
+window's shape in Wide) is play area.  The game's own 13 x 10-tile view sits in
+the middle of it; the view extends 20 lines above and below and to the
+sides, stopping at the map edges (near the top or bottom of a level the
+extra rows all go to the other side).  The activity window grows the same
+way, with a tile's margin above and two below (tall objects show their
+upper part first).  Dialog boxes and on-screen text keep their exact place
+in the original window, which is centred on the screen - so they are
+centred as before.  The level backdrop (or its replacement art) fills the
+whole screen.
 
 ### Sound (Enhanced mode)
 
@@ -317,7 +351,7 @@ build/dn1_headless --dir <game folder> --export-sounds <output folder>
 | Nearest | plain nearest-neighbour; razor-sharp edges, but at most window sizes some game pixels come out one screen pixel wider or taller than their neighbours |
 
 In windowed mode the window takes the shape of the picture: 4:3, or 16:9
-when widescreen is on (Enhanced mode), at the *Window size* setting.
+with *Aspect = Wide* (Enhanced mode), at the *Window size* setting.
 
 Smooth motion presents on a fixed timeline at the chosen rate (30/60/120 or
 the display's rate), so the frame rate stays at the cap with even spacing.
@@ -328,7 +362,7 @@ title.
 
 ### Widescreen art (replacement pictures and backdrops)
 
-In Enhanced mode with widescreen on, Techbot looks in a **`widescreen`**
+In Enhanced mode with *Aspect = Wide* (or, for backdrops, *HUD = Immersive*), Techbot looks in a **`widescreen`**
 subfolder of the game folder for PNG files named after an original picture or
 backdrop file plus `.png` - the names `tools/extract_images.py` writes
 (below):
@@ -336,28 +370,35 @@ backdrop file plus `.png` - the names `tools/extract_images.py` writes
 | File | Replaces | Shown |
 |---|---|---|
 | `DN.DN1.png`, `END.DN1.png`, `BADGUY.DN1.png`, `DUKE.DN1.png`, `CREDITS.DN1.png` | the full-screen pictures (title, ending, Dr. Proton, Duke, credits) | filling the wide screen; menus and dialogs the game draws over a picture stay on top |
-| `DROP0.DN1.png` ... | level backdrops | filling the wide play area (both backdrops of levels that have two) |
+| `DROP0.DN1.png` ... | level backdrops | filling the play area, wide or immersive (both backdrops of levels that have two) |
 
 (`.DN2` / `.DN3` in the names for the other episodes.)  Files that are not
 there simply keep the original.  Original mode, and Enhanced mode with
-widescreen off, always show the originals.
+Classic aspect and HUD, always show the originals.  Backdrop art is scaled to
+cover the play area and cropped evenly to its shape, never stretched, so one
+picture serves both Wide (a wider, shorter area) and Immersive (the whole
+screen); keep what matters away from the edges.
 
-**Sizes.**  Any size and any colours.  Art whose height is a multiple of 200
-(pictures) or 160 (backdrops) is taken to be in the game's own pixels, which
-are shown 1.2x taller than wide like the originals, and is scaled without
-smoothing; anything else (e.g. 1920x1080) is taken to have square pixels and
-is scaled smoothly.  Art is scaled to fill its area and cropped evenly at the
-sides (or top and bottom) if its shape differs from the window's.
+**Sizes.**  Any size and any colours.  Art in the game's own pixels - 200
+lines tall (or 2x / 3x: 400, 600), and for backdrops also 160 (320, 480) -
+is shown 1.2x taller than wide like the originals and scaled without
+smoothing; anything else (e.g. 1920x1080, 1560x960) is taken to have square
+pixels and is scaled smoothly.  Art is scaled to cover its area and cropped
+evenly at the sides (or top and bottom) if its shape differs - never
+stretched.
 
-| Window | Picture | Backdrop |
-|---|---|---|
-| 4:3 (original) | 320 x 200 | 208 x 160 |
-| 16:10 | 384 x 200 | 272 x 160 |
-| 16:9 | 424 x 200 | 312 x 160 |
-| 21:9 | 568 x 200 | 456 x 160 |
+| Window | Picture | Backdrop, Wide | Backdrop, Immersive |
+|---|---|---|---|
+| 4:3 (original) | 320 x 200 | 208 x 160 | 320 x 200 |
+| 16:10 | 384 x 200 | 272 x 160 | 384 x 200 |
+| 16:9 | 424 x 200 | 312 x 160 | 424 x 200 |
+| 21:9 | 568 x 200 | 456 x 160 | 568 x 200 |
 
 (in game pixels; for square-pixel art match the displayed shape instead:
-16:9 for pictures, about 1.63:1 for 16:9 backdrops, e.g. 1560 x 960.)
+16:9 for pictures and Immersive backdrops, e.g. 1920 x 1080; about 1.63:1
+for Wide 16:9 backdrops, e.g. 1560 x 960.  One backdrop serves both screens:
+an Immersive-shaped one loses a little at the sides in Wide, a Wide-shaped
+one a little at the top and bottom in Immersive.)
 
 **Fades.**  The game fades by turning its 16 palette colours to black (or
 white) one at a time; each pixel of replacement art follows the palette colour
@@ -405,7 +446,9 @@ volume = 5             # 0 (off) .. 5 (full), in 20% steps
 mode = original        # original | enhanced (enhanced features arrive in later versions)
 menus = cursor         # cursor | classic (letter keys only, exactly as in DOS)
 smooth = display       # Enhanced mode in-between frames: off | 30 | 60 | 120 | display
-widescreen = 1         # Enhanced mode: play area follows the window's shape
+aspect = wide          # Enhanced mode: classic (4:3) | wide (follows the window's shape)
+hud = classic          # Enhanced mode: classic | immersive (bar over the play) | immersive_alt (bar below it) | off
+key.hud = 0x0f         # in play: HUD Off <-> Immersive (scancode; 0x0f = Tab)
 sound = overlap        # Enhanced mode: original | overlap | hifi
 scale = 4              # initial window size (command line --scale overrides)
 scaling = sharp        # sharp (every pixel the same size) | nearest

@@ -55,13 +55,14 @@ static const char *btn_label(int b)
 
 /* ---------------------------------------------------------------- layout:
  * the dialog box is 13 tiles wide; its inside spans byte columns x+2..x+23 */
-static void frame(int x, const char *title)
+static void frame_at(int x, const char *title, int title_row)
 {
     WRITE_MODE_LATCH();
     ui_box(x, 2, 8);
     WRITE_MODE_NORMAL();
-    ui_text(title, x + 2 + (22 - (int)strlen(title)) / 2, 7);
+    ui_text(title, x + 2 + (22 - (int)strlen(title)) / 2, title_row);
 }
+static void frame(int x, const char *title) { frame_at(x, title, 7); }
 static void row(int x, int r, const char *label, const char *value)
 {
     ui_text(label, x + 4, r);
@@ -94,24 +95,25 @@ static void save_cfg(void) { cfg_save(game_path(PORT_CFG_FILE)); }
 /* ---------------------------------------------------------------- keyboard */
 static void keyboard_menu(int x)
 {
-    static const char *const act[8] = { "Up", "Down", "Left", "Right", "Fire", "Jump", "Quicksave", "Quickload" };
-    static const int rows[10] = { 9, 10, 11, 12, 13, 14, 15, 16, 18, 19 };
-    MenuItem it[10];
+    static const char *const act[9] = { "Up", "Down", "Left", "Right", "Fire", "Jump", "Quicksave", "Quickload", "HUD toggle" };
+    static const int rows[11] = { 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 };
+    MenuItem it[11];
     int sel = 0, dir, i, k;
-    items(it, rows, 10, x);
+    items(it, rows, 11, x);
     for (;;) {
         frame(x, "Keyboard");
         for (i = 0; i < 6; i++) row(x, rows[i], act[i], key_name(key_bind[i]));
         row(x, rows[6], act[6], key_name(cfg.key_qsave));
         row(x, rows[7], act[7], key_name(cfg.key_qload));
+        row(x, rows[8], act[8], key_name(cfg.key_hud));
         row(x, 18, "Defaults", NULL);
         row(x, 19, "Done", NULL);
-        k = choose(it, 10, &sel, &dir);
-        if (k < 0 || k == 9) return;
-        if (k == 8) {                                   /* the EXE's own initial bindings */
+        k = choose(it, 11, &sel, &dir);
+        if (k < 0 || k == 10) return;
+        if (k == 9) {                                   /* the EXE's own initial bindings */
             for (i = 0; i < 6; i++) key_bind[i] = ds_u8((uint16_t)(0x02F4 + i));
             save_keys(ds_str(0x0AB2));
-            cfg.key_qsave = 0x3F; cfg.key_qload = 0x43;
+            cfg.key_qsave = 0x3F; cfg.key_qload = 0x43; cfg.key_hud = 0x0F;
             save_cfg();
             continue;
         }
@@ -129,11 +131,11 @@ static void keyboard_menu(int x)
             ui_context = prev;
         }
         if (last_scancode != KEY_CANCEL) {
-            uint8_t sc = last_scancode, *slot[8], old;
+            uint8_t sc = last_scancode, *slot[9], old;
             for (i = 0; i < 6; i++) slot[i] = &key_bind[i];
-            slot[6] = &cfg.key_qsave; slot[7] = &cfg.key_qload;
+            slot[6] = &cfg.key_qsave; slot[7] = &cfg.key_qload; slot[8] = &cfg.key_hud;
             old = *slot[k];
-            for (i = 0; i < 8; i++) if (i != k && *slot[i] == sc) *slot[i] = old;   /* swap */
+            for (i = 0; i < 9; i++) if (i != k && *slot[i] == sc) *slot[i] = old;   /* swap */
             *slot[k] = sc;
             save_keys(ds_str(0x0AB2));                  /* KEYS.DN1, as the original's own screen does */
             save_cfg();                                 /* quicksave keys live in TECHBOT.CFG */
@@ -251,19 +253,20 @@ int ui_episode_select(int x)
 /* ---------------------------------------------------------------- top level */
 void ui_options(int x)
 {
-    static const int rows[11] = { 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 };
-    MenuItem it[11];
+    /* twelve rows: the title sits higher than in the other screens */
+    static const int rows[12] = { 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19 };
+    MenuItem it[12];
     int sel = 0, dir, k;
     char v[12];
-    items(it, rows, 11, x);
+    items(it, rows, 12, x);
     for (;;) {
-        frame(x, "Options");
-        row(x, 9,  "Game mode", cfg.mode == MODE_ENHANCED ? "Enhanced" : "Original");
-        row(x, 10, "Menus", cfg.cursor_menus ? "Cursor" : "Classic");
-        row(x, 11, "Fullscreen", cfg.fullscreen ? "On" : "Off");
+        frame_at(x, "Options", 6);
+        row(x, 8,  "Game mode", cfg.mode == MODE_ENHANCED ? "Enhanced" : "Original");
+        row(x, 9,  "Menus", cfg.cursor_menus ? "Cursor" : "Classic");
+        row(x, 10,  "Fullscreen", cfg.fullscreen ? "On" : "Off");
         snprintf(v, sizeof v, "x%d", cfg.scale);
-        row(x, 12, "Window size", v);
-        row(x, 13, "Scaling", cfg.scaling == SCALE_NEAREST ? "Nearest" : "Sharp");
+        row(x, 11, "Window size", v);
+        row(x, 12, "Scaling", cfg.scaling == SCALE_NEAREST ? "Nearest" : "Sharp");
         /* smooth motion is an Enhanced-mode feature: Original shows every
          * frame exactly as DN1.EXE drew it */
         {
@@ -272,16 +275,18 @@ void ui_options(int x)
             else if (cfg.smooth > 0) snprintf(sm, sizeof sm, "%d fps", cfg.smooth);
             else strcpy(sm, "Display");
             if (cfg.smooth && cfg.mode != MODE_ENHANCED) strcpy(sm, "Enh. only");
-            row(x, 14, "Smoothing", sm);
+            row(x, 13, "Smoothing", sm);
         }
-        row(x, 15, "Widescreen", !cfg.widescreen ? "Off" : cfg.mode == MODE_ENHANCED ? "On" : "Enh. only");
+        row(x, 14, "Aspect", !cfg.widescreen ? "Classic" : cfg.mode == MODE_ENHANCED ? "Wide" : "Enh. only");
+        row(x, 15, "HUD", !cfg.hud ? "Classic" : cfg.mode != MODE_ENHANCED ? "Enh. only"
+                            : cfg.hud == HUD_IMMERSIVE ? "Immersive" : cfg.hud == HUD_OFF ? "Off" : "Immersive Alt");
         row(x, 16, "Sound", !cfg.sound ? "Original" : cfg.mode != MODE_ENHANCED ? "Enh. only"
                               : cfg.sound == SND_OVERLAP ? "Overlap" : "Hi-fi");
         row(x, 17, "Controller", NULL);
         row(x, 18, "Keyboard", NULL);
         row(x, 19, "Done", NULL);
-        k = choose(it, 11, &sel, &dir);
-        if (k < 0 || k == 10) break;
+        k = choose(it, 12, &sel, &dir);
+        if (k < 0 || k == 11) break;
         switch (k) {
         case 0:
             cfg.mode = !cfg.mode;
@@ -306,12 +311,26 @@ void ui_options(int x)
             break;
         }
         case 6: cfg.widescreen = !cfg.widescreen; pf_apply_settings(); break;
-        case 7: cfg.sound = (cfg.sound + (dir < 0 ? 2 : 1)) % 3; break;
-        case 8: if (!dir) controller_menu(x); break;
-        case 9: if (!dir) keyboard_menu(x); break;
+        case 7: cfg.hud = (cfg.hud + (dir < 0 ? 3 : 1)) % 4; pf_apply_settings(); break;
+        case 8: cfg.sound = (cfg.sound + (dir < 0 ? 2 : 1)) % 3; break;
+        case 9: if (!dir) controller_menu(x); break;
+        case 10: if (!dir) keyboard_menu(x); break;
         }
         save_cfg();
     }
     save_cfg();
     last_scancode = 0;
+}
+
+/* ---------------------------------------------------------------- in play
+ * the HUD toggle key: Off <-> the Immersive HUD last used (Immersive or
+ * Immersive Alt); nothing with the Classic HUD or in Original mode */
+volatile uint8_t port_hud_request;
+void port_toggle_hud(void)
+{
+    static int last = HUD_IMMERSIVE;
+    if (cfg.mode != MODE_ENHANCED || cfg.hud == HUD_CLASSIC) return;
+    if (cfg.hud == HUD_OFF) cfg.hud = last;
+    else { last = cfg.hud; cfg.hud = HUD_OFF; }
+    save_cfg();
 }

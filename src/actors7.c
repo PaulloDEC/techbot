@@ -47,7 +47,7 @@ void act_reactor(void)
     }
     if (reactor_alive == 0) {
         const uint8_t *g = hit ? anim_gfx + 0x9F60 : object_gfx + (uint16_t)(reactor_anim + 0x3840);
-        play_sound(0x24);
+        if (!unheard(reactor_x, reactor_y)) play_sound(0x24);         /* (port: unheard) */
         draw_sprite(g, SCREEN_X(reactor_x), SCREEN_Y(reactor_y));
         if (!offscreen(reactor_x, reactor_y - 0x80))  draw_sprite(g, SCREEN_X(reactor_x), SCREEN_Y(reactor_y) - 16);
         if (!offscreen(reactor_x, reactor_y - 0x100)) draw_sprite(g, SCREEN_X(reactor_x), SCREEN_Y(reactor_y) - 32);
@@ -238,7 +238,7 @@ void act_bombs(void)
         if (offscreen(b->x, b->y)) continue;
         b->y = (int16_t)(b->y - (int16_t)ds_u16((uint16_t)((b->s + 6) * 2 + 0x5E2)));
         if (++b->s == 8) b->s = -6;
-        if (b->s == -6) play_sound(0x22);
+        if (b->s == -6 && !unheard(b->x, b->y)) play_sound(0x22);     /* (port: unheard) */
         if (player_touches(b->x, b->y)) player_hurt = 1;
         shot_hits(b->x, b->y);
         if (!offscreen(b->x, b->y)) draw_anim(0x8B60, b->x, b->y);

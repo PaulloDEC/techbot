@@ -23,7 +23,7 @@ static void draw_heli_rotor(int frame, int x, int y)
     for (k = 0; k < 4; k++)
         if (!offscreen(x + k * 2, y)) {
             draw_sprite(anim_gfx + (uint16_t)(g + k * 0xA0), SCREEN_X(x) + k * 2, SCREEN_Y(y));
-            if (k == 3) play_sound(0x16);
+            if (k == 3 && !unheard(x + k * 2, y)) play_sound(0x16);     /* (port: unheard) */
         }
 }
 

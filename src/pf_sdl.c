@@ -294,7 +294,13 @@ static int out_w = 320;              /* width of the picture being shown       *
  * size of one game pixel in screen pixels (usually not whole numbers). */
 typedef struct { int w; double px, py; SDL_Rect dst; } Layout;
 
+/* Enhanced mode: the picture follows the window's shape (Aspect = Wide) /
+ * the play area is the whole picture (HUD = Immersive) - either or both */
 static int want_wide(void) { return cfg.widescreen && cfg.mode == MODE_ENHANCED; }
+static int want_imm(void) { return cfg.hud != HUD_CLASSIC && cfg.mode == MODE_ENHANCED; }
+/* the play area's height in an Immersive picture: all 200 lines, or (Alt)
+ * down to one line above the HUD bar */
+static int imm_h(void) { return cfg.hud == HUD_IMMERSIVE_ALT ? hud_bar_top() : 200; }
 
 /* the layout for this window; w = 0 picks the width (widescreen follows the
  * window's shape) */
@@ -317,7 +323,21 @@ static Layout layout(int w)
 }
 
 static int wide_width(void) { return want_wide() ? layout(0).w : 320; }
-static void update_view(void) { int w = wide_width(); dl_set_view(w > 320, w - 112); }
+/* the play area's width in a picture w wide: between the border and the status
+ * panel, or (immersive) all of it */
+static int play_w(int w) { return want_imm() ? w : w - 112; }
+static void update_view(void)
+{
+    int w = wide_width();
+    if (want_imm()) dl_set_view(1, w, imm_h());
+    else dl_set_view(w > 320, w - 112, 160);
+}
+/* the play area in the picture: x, y, width, height */
+static void play_rect(int w, int *x, int *y, int *pw, int *ph)
+{
+    if (want_imm()) { *x = 0; *y = 0; *pw = w; *ph = imm_h(); }
+    else { *x = 16; *y = 16; *pw = w - 112; *ph = 160; }
+}
 
 /* optional frame-rate readout in the window title (show_fps = 1) */
 static void count_frame(void)
@@ -384,11 +404,13 @@ static SDL_Rect cover_src(const Art *a, double area_aspect)
  * two layers are added - plain blend modes every renderer supports. */
 static void draw_backdrops(const SDL_Rect *bd, int w, const uint8_t *idx)
 {
-    static uint32_t mpix[2][(MAX_W - 112) * 160];
-    double area = (w - 112) / 192.0;            /* displayed shape: 160 lines x 1.2 */
+    static uint32_t mpix[2][MAX_W * 200];
     SDL_Texture *t[2], *prev;
     SDL_Rect s[2], full, msrc;
-    int k, x, y, pw = w - 112;
+    int k, x, y, x0, y0, pw, ph;
+    double area;
+    play_rect(w, &x0, &y0, &pw, &ph);
+    area = pw / (ph * 1.2);                     /* displayed shape: lines are 1.2 tall */
     t[0] = bd_art[0] ? art_texture(&at_bd[0], bd_art[0]) : NULL;
     if (t[0]) s[0] = cover_src(bd_art[0], area);
     else { t[0] = bdtex; s[0].x = 0; s[0].y = 0; s[0].w = 208; s[0].h = 160; }
@@ -398,7 +420,7 @@ static void draw_backdrops(const SDL_Rect *bd, int w, const uint8_t *idx)
     /* masks: white where each backdrop shows, black elsewhere */
     for (k = 0; k < 2; k++) {
         if (!mask_tex[k]) {
-            mask_tex[k] = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, MAX_W - 112, 160);
+            mask_tex[k] = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, MAX_W, 200);
             if (!mask_tex[k]) { SDL_RenderCopy(ren, t[0], &s[0], bd); return; }
             SDL_SetTextureBlendMode(mask_tex[k], SDL_BLENDMODE_MOD);
 #if SDL_VERSION_ATLEAST(2, 0, 12)
@@ -406,13 +428,13 @@ static void draw_backdrops(const SDL_Rect *bd, int w, const uint8_t *idx)
 #endif
         }
     }
-    for (y = 0; y < 160; y++)
+    for (y = 0; y < ph; y++)
         for (x = 0; x < pw; x++) {
-            uint8_t c = idx[(16 + y) * w + 16 + x];
+            uint8_t c = idx[(y0 + y) * w + x0 + x];
             mpix[0][y * pw + x] = c == 16 ? 0xFFFFFFFFu : 0xFF000000u;
             mpix[1][y * pw + x] = c == 17 ? 0xFFFFFFFFu : 0xFF000000u;
         }
-    msrc.x = 0; msrc.y = 0; msrc.w = pw; msrc.h = 160;
+    msrc.x = 0; msrc.y = 0; msrc.w = pw; msrc.h = ph;
     for (k = 0; k < 2; k++) SDL_UpdateTexture(mask_tex[k], &msrc, mpix[k], pw * 4);
     if (!bd_layer[0] || bd->w > bd_layer_w || bd->h > bd_layer_h) {
         for (k = 0; k < 2; k++) { if (bd_layer[k]) SDL_DestroyTexture(bd_layer[k]); bd_layer[k] = NULL; }
@@ -464,7 +486,7 @@ static void draw_picture_art(const Layout *L)
  * such as the white flash before a level fill the whole screen */
 static void clear_outside(void)
 {
-    uint32_t c = want_wide() ? ega_rgb(ega_palette[0]) : 0;
+    uint32_t c = want_wide() || want_imm() ? ega_rgb(ega_palette[0]) : 0;
     SDL_SetRenderDrawColor(ren, (Uint8)(c >> 16), (Uint8)(c >> 8), (Uint8)c, 255);
     SDL_RenderClear(ren);
 }
@@ -514,7 +536,9 @@ static void show_indexed(const uint8_t *idx, int w, const uint8_t *backdrop)
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, pic_art ? 0 : 255);
                 SDL_RenderClear(ren);
                 if (backdrop) {
-                    bd.x = 16 * kx; bd.y = 16 * ky; bd.w = (w - 112) * kx; bd.h = 160 * ky;
+                    int x0, y0, pw, ph;
+                    play_rect(w, &x0, &y0, &pw, &ph);
+                    bd.x = x0 * kx; bd.y = y0 * ky; bd.w = pw * kx; bd.h = ph * ky;
                     draw_backdrops(&bd, w, idx);
                 }
                 SDL_RenderCopy(ren, tex, &src, &area);
@@ -529,8 +553,10 @@ static void show_indexed(const uint8_t *idx, int w, const uint8_t *backdrop)
             clear_outside();
             if (pic_art) draw_picture_art(&L);
             if (backdrop) {
-                bd.x = L.dst.x + (int)(16 * L.px + 0.5); bd.y = L.dst.y + (int)(16 * L.py + 0.5);
-                bd.w = (int)((w - 112) * L.px + 0.5);   bd.h = (int)(160 * L.py + 0.5);
+                int x0, y0, pw, ph;
+                play_rect(w, &x0, &y0, &pw, &ph);
+                bd.x = L.dst.x + (int)(x0 * L.px + 0.5); bd.y = L.dst.y + (int)(y0 * L.py + 0.5);
+                bd.w = (int)(pw * L.px + 0.5);           bd.h = (int)(ph * L.py + 0.5);
                 draw_backdrops(&bd, w, idx);
             }
             SDL_RenderCopy(ren, tex, &src, &L.dst);
@@ -560,8 +586,8 @@ static int compose_wide(double alpha, int overlay)
 {
     static uint8_t out[MAX_W * 200], bd[208 * 160];
     int w = wide_width();
-    if (w <= 320 || !(dl_frame_ready() || port_level_intro)) return 0;
-    if (dl_view_w != w - 112) update_view();
+    if ((w <= 320 && !want_imm()) || !(dl_frame_ready() || port_level_intro)) return 0;
+    if (dl_view_w != play_w(w) || dl_immersive != want_imm() || (want_imm() && dl_view_h != imm_h())) update_view();
     /* replacement backdrops for this level (widescreen/DROPn.DNx.png) */
     bd_art[0] = art_get(art_backdrop_name(0), ART_BACKDROP);
     bd_art[1] = art_get(art_backdrop_name(1), ART_BACKDROP);
@@ -615,8 +641,8 @@ static int picture_with_art(uint8_t *idx)
  * frame on screen meanwhile rather than showing the 4:3 page for a frame */
 static int hold_wide(void)
 {
-    return want_wide() && port_in_play && dl_wide_shown && !port_level_intro &&
-           !dl_frame_ready() && wide_width() > 320;
+    return (want_wide() || want_imm()) && port_in_play && dl_wide_shown && !port_level_intro &&
+           !dl_frame_ready() && (wide_width() > 320 || want_imm());
 }
 
 void pf_present(void)
@@ -939,8 +965,9 @@ int main(int argc, char **argv)
     }
     port_log_step("reading settings");
     cfg_load(game_path(PORT_CFG_FILE));                   /* command line overrides it */
-    port_log("settings: mode %s, widescreen %d, smoothing %d, scaling %s, sound %d, volume %d, fullscreen %d, scale %d, episode %d",
-             cfg.mode == MODE_ENHANCED ? "enhanced" : "original", cfg.widescreen, cfg.smooth,
+    port_log("settings: mode %s, aspect %s, hud %s, smoothing %d, scaling %s, sound %d, volume %d, fullscreen %d, scale %d, episode %d",
+             cfg.mode == MODE_ENHANCED ? "enhanced" : "original",
+             cfg.widescreen ? "wide" : "classic", cfg.hud == HUD_IMMERSIVE ? "immersive" : cfg.hud == HUD_OFF ? "off" : cfg.hud ? "immersive_alt" : "classic", cfg.smooth,
              cfg.scaling == SCALE_NEAREST ? "nearest" : "sharp", cfg.sound, cfg.volume, cfg.fullscreen, cfg.scale, cfg.episode);
     if (scale < 1) scale = cfg.scale;
     if (fullscreen < 0) fullscreen = cfg.fullscreen;

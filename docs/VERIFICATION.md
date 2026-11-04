@@ -117,6 +117,10 @@ sprites straddling the original window edge, which widescreen draws in full
 and keeps out of EGA memory (that memory still supplies the borders and the
 status panel).  With widescreen off, the attract demo is unchanged.
 
+`dn1_headless --immersive W` does the same for the Immersive screen (W x 200,
+all play area); `WIDE_CHECK=1` then compares the original view at its place
+in the taller area, with the same result as Wide.
+
 ## Sound
 
 The Enhanced mixer (`port_sound.c`) only listens: `play_sound()` hands each

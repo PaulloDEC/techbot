@@ -5,6 +5,7 @@
  */
 #include "dn1.h"
 #include <stdlib.h>
+#include <string.h>
 
 /* draw helpers: sprite at a world position (x in columns, y in 1/8 px) */
 void draw_obj(int gfx_off, int x, int y)  { draw_sprite(object_gfx + (uint16_t)gfx_off, SCREEN_X(x), SCREEN_Y(y)); }
@@ -13,8 +14,26 @@ void draw_anim(int gfx_off, int x, int y) { draw_sprite(anim_gfx + (uint16_t)gfx
 /* 0097:326E  1 = outside the 13x10-tile play window (plus a half-tile margin) */
 int offscreen(int x, int y)
 {
-    /* (port) port_act_left/right are 0 except in Enhanced widescreen */
+    /* (port) port_act_left/right/up/down are 0 except in Enhanced wide and
+     * immersive screens: the window then covers the whole visible area */
     if (x >= scroll_x - port_act_left && scroll_x + 0x1D + port_act_right > x &&
+        scroll_y - 0x40 - port_act_up <= y && scroll_y + 0x500 + port_act_down > y)
+        return 0;
+    return 1;
+}
+
+/* (port) The same test for the sounds that play because something is on
+ * screen (reactor and force-field hum, helicopter rotors, flamethrower ignition,
+ * bouncing bombs, enemy shots): in Wide and Immersive the activity window reaches past what is
+ * visible - a tile's margin, and in Immersive rows above and below the
+ * original view - and an object there would sound without being seen (or
+ * from a sliver at the edge).  These sounds keep the original's window
+ * vertically and the visible width horizontally, so they play when DN1.EXE
+ * would have played them, plus for objects in plain sight to the sides.
+ * Original mode: identical to offscreen(). */
+int unheard(int x, int y)
+{
+    if (x >= scroll_x - port_aud_left && scroll_x + 0x1D + port_act_right > x &&
         scroll_y - 0x40 <= y && scroll_y + 0x500 > y)
         return 0;
     return 1;
@@ -55,11 +74,45 @@ int player_in_span(int x0, int x1, int y)
     return 0;
 }
 
+/* (port) Spent shots.  Duke may have max_shots shots in flight; a slot
+ * frees when its shot hits something or leaves the activity window.  In
+ * Wide and Immersive that window is the larger visible area, so shots stayed
+ * counted far longer than in the original and the gun fired more slowly.  A
+ * shot leaving the original's window while still in view therefore moves
+ * here: its slot is free again (the fire rate is DN1.EXE's) while the shot
+ * itself flies on, hits and is drawn as before until it hits something or
+ * leaves the screen.  With the original window (Classic, Original mode)
+ * nothing ever moves here. */
+#define MAX_SPENT 32
+static Obj8 spent[MAX_SPENT];
+void shots_spent_clear(void) { memset(spent, 0, sizeof spent); }
+
+/* the original's activity window (offscreen() without the port's widening) */
+static int orig_offscreen(int x, int y)
+{
+    return !(x >= scroll_x && scroll_x + 0x1D > x && scroll_y - 0x40 <= y && scroll_y + 0x500 > y);
+}
+
+static int hits_one(Obj8 *s, int x, int y)
+{
+    if (s->s == 0) return 0;
+    if (abs(s->x - x) >= 2) return 0;
+    if (s->y - y >= 0x80 || s->y - y < -0x80) return 0;
+    if (s->s == 1) { s->s = 0; return 1; }
+    if (s->s == 5) { s->s = 0; return 2; }
+    s->s = 0;
+    return 0;
+}
+
 /* 0097:3558  does one of Duke's shots hit (x,y)?  Consumes the shot.
  * returns 1 for a normal shot (state 1), 2 for state 5, else 0 */
 int shot_hits(int x, int y)
 {
     int i;
+    for (i = 0; i < MAX_SPENT; i++) {                    /* (port) spent shots */
+        int h = hits_one(&spent[i], x, y);
+        if (h) return h;
+    }
     for (i = 0; i < max_shots; i++) {
         Obj8 *s = &shots[i];
         if (s->s == 0) continue;
@@ -335,7 +388,7 @@ void spawn_eshot(int dir, int x, int y)
         EShot *e = &eshots[i];
         if (e->dir) continue;
         e->dir = (int16_t)dir; e->x = (int16_t)x; e->y = (int16_t)y; e->active = 1;
-        if (!offscreen(e->x, e->y)) play_sound(0x0B);
+        if (!unheard(e->x, e->y)) play_sound(0x0B);                    /* (port: unheard) */
         return;
     }
 }
@@ -365,11 +418,34 @@ void spawn_shot(int x, int y, int dir)
 
 /* 0097:1933  move + draw Duke's shots (2 columns per frame) */
 uint8_t player_shot_pass;   /* 530F: set while player shots are tested against walls */
+/* (port) a spent shot: the same flight as below, gone off the visible area */
+static void fly_spent(Obj8 *s)
+{
+    int left = s->s == 1;
+    s->x += left ? -2 : 2;
+    player_shot_pass = 1;
+    if (shot_blocked(left ? s->x + 1 : s->x, s->y)) {
+        s->s = 0; spawn_spark(1, left ? s->x + 1 : s->x - 1, s->y + 0x40); return;
+    }
+    if (offscreen(s->x, s->y)) { s->s = 0; return; }
+    draw_sprite(object_gfx + (uint16_t)(anim_0646 + (left ? 0x3C0 : 0x500)), SCREEN_X(s->x), SCREEN_Y(s->y) + 3);
+}
+/* (port) a shot just left the original window: if still in view, spend it */
+static int spend(Obj8 *s)
+{
+    int k;
+    if (!orig_offscreen(s->x, s->y) || offscreen(s->x, s->y)) return 0;
+    for (k = 0; k < MAX_SPENT; k++)
+        if (spent[k].s == 0) { spent[k] = *s; spent[k].t = 0; s->s = 0; return 1; }
+    return 0;                                       /* (pool full: stays counted) */
+}
+
 void update_shots(void)
 {
     int i;
     anim_0646 += 0xA0;
     if (anim_0646 == 0x140) anim_0646 = 0;
+    for (i = 0; i < MAX_SPENT; i++) if (spent[i].s) fly_spent(&spent[i]);   /* (port) */
     for (i = 0; i < max_shots; i++) {
         Obj8 *s = &shots[i];
         if (s->s == 0) continue;
@@ -378,6 +454,10 @@ void update_shots(void)
             player_shot_pass = 1;
             if (shot_blocked(s->x + 1, s->y)) {
                 s->s = 0; spawn_spark(1, s->x + 1, s->y + 0x40); continue;
+            }
+            if (!s->t && spend(s)) {                       /* (port) */
+                draw_sprite(object_gfx + (uint16_t)(anim_0646 + 0x3C0), SCREEN_X(s->x), SCREEN_Y(s->y) + 3);
+                continue;
             }
             if (offscreen(s->x, s->y)) s->s = 0;
             else if (s->t == 0)
@@ -392,6 +472,10 @@ void update_shots(void)
             player_shot_pass = 1;
             if (shot_blocked(s->x, s->y)) {
                 s->s = 0; spawn_spark(1, s->x - 1, s->y + 0x40); continue;
+            }
+            if (!s->t && spend(s)) {                       /* (port) */
+                draw_sprite(object_gfx + (uint16_t)(anim_0646 + 0x500), SCREEN_X(s->x), SCREEN_Y(s->y) + 3);
+                continue;
             }
             if (offscreen(s->x, s->y)) s->s = 0;
             else if (s->t == 0)

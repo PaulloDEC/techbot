@@ -76,6 +76,7 @@ void play_level_loop(void)
     in_down = 0; in_up = 0; in_right = 0; in_left = 0; in_jump = 0; in_fire = 0;
     if (demo_play) last_scancode = 0;
     port_qs_request = 0;                 /* (port) ignore presses made before play */
+    port_hud_request = 0;
 
 resume:
     for (;;) {
@@ -223,6 +224,7 @@ resume:
         /* (port) quicksave / quickload, handled like the original's toggles.
          * Keys are 0 (off) unless the settings file defines them, so the
          * verification build never takes this path. */
+        if (port_hud_request) { port_hud_request = 0; port_toggle_hud(); }   /* (port) */
         if (port_qs_request && demo_play == 0) {
             uint8_t k = port_qs_request;
             port_qs_request = 0;

@@ -240,7 +240,7 @@ static void flamers(Obj6 *arr, int n, int dir)
         Obj6 *f = &arr[i];
         if (f->s == 0) continue;
         if (++f->s < 0x0F) continue;
-        if (f->s == 0x0F && !offscreen(f->x, f->y)) play_sound(0x2B);
+        if (f->s == 0x0F && !unheard(f->x, f->y)) play_sound(0x2B);    /* (port: unheard) */
         if (f->s < 0x19) {
             if ((f->s % 2) && !offscreen(f->x, f->y))
                 draw_obj(dir > 0 ? 0xF00 : 0x1220, f->x, f->y);

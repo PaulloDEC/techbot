@@ -8,8 +8,8 @@
  *     the wide screen, with anything the game draws over them (menus,
  *     dialogs) laid on top;
  *   - level backdrops fill the wide play area.
- * Any size and any colours: art whose height is a multiple of 200 (pictures)
- * or 160 (backdrops) is taken to be in the game's own pixels, shown 1.2x as
+ * Any size and any colours: art 200, 400 or 600 lines tall (backdrops also
+ * 160, 320 or 480) is taken to be in the game's own pixels, shown 1.2x as
  * tall as wide like the originals; anything else is taken to have square
  * pixels (e.g. 1920x1080).  Art is scaled to fill the area and cropped
  * evenly at the sides (or top and bottom) if its shape differs.
@@ -69,6 +69,18 @@ static int nearest_slot(uint32_t argb)
     return best;
 }
 
+/* Art in the game's own pixels (shown 1.2x as tall as wide, unsmoothed) is
+ * recognised by its height: 1x to 3x the original's - 200 lines for pictures,
+ * 160 (the Wide play area) or 200 (the Immersive one) for backdrops.  Taller
+ * art - 720, 800, 960, 1080 lines and so on - has square pixels. */
+static int game_pixel_height(int h, int kind)
+{
+    int k;
+    for (k = 1; k <= 3; k++)
+        if (h == 200 * k || (kind == ART_BACKDROP && h == 160 * k)) return 1;
+    return 0;
+}
+
 static void load(Entry *e, int kind)
 {
     char path[64];
@@ -82,7 +94,7 @@ static void load(Entry *e, int kind)
     fclose(f);
     if (!px || w < 8 || h < 8) { if (px) stbi_image_free(px); e->missing = 1; return; }
     e->art.w = w; e->art.h = h;
-    e->art.game_pixels = h % (kind == ART_PICTURE ? 200 : 160) == 0;
+    e->art.game_pixels = game_pixel_height(h, kind);
     e->art.aspect = e->art.game_pixels ? (double)w / (h * 1.2) : (double)w / h;
     e->art.orig = (uint32_t *)malloc((size_t)w * h * 4);
     e->art.pixels = (uint32_t *)malloc((size_t)w * h * 4);
@@ -135,8 +147,11 @@ found:
 int port_picture = -1;           /* full-screen picture being shown (0..4), -1 none */
 
 /* the original file names of the current level's two backdrops (the game's
- * own table at DS:0B47, indexed by level - the second one is the next entry) */
+ * own table at DS:0B47, indexed by level - the second one is the next entry).
+ * level_index counts levels (even) and the hallways after them (odd); the
+ * game loads backdrops only when a level starts (load_level), so a hallway
+ * shows the pair of the level before it. */
 const char *art_backdrop_name(int which)
 {
-    return ds_farstr((uint16_t)(0x0B47 + (level_index + which) * 4));
+    return ds_farstr((uint16_t)(0x0B47 + ((level_index & ~1) + which) * 4));
 }

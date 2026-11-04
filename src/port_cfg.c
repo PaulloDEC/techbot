@@ -54,13 +54,15 @@ void cfg_defaults(void)
     cfg.scaling = SCALE_SHARP;
     cfg.fullscreen = 0;
     cfg.smooth = -1;                     /* match the display */
-    cfg.widescreen = 1;
+    cfg.widescreen = ASPECT_WIDE;
+    cfg.hud = HUD_CLASSIC;
     cfg.sound = SND_OVERLAP;
     cfg.episode = 1;
     cfg.volume = 5;
     cfg_default_pad();
     cfg.key_qsave = 0x3F;   /* F5 */
     cfg.key_qload = 0x43;   /* F9 */
+    cfg.key_hud = 0x0F;     /* Tab (H is the game's own hint toggle) */
 }
 
 static char *trim(char *s)
@@ -117,13 +119,22 @@ void cfg_load(const char *path_in)
         }
         else if (!strcmp(k, "show_fps")) cfg.show_fps = atoi(v) != 0 || !strcmp(v, "yes");
         else if (!strcmp(k, "scaling")) cfg.scaling = !strcmp(v, "nearest") ? SCALE_NEAREST : SCALE_SHARP;
-        else if (!strcmp(k, "widescreen")) cfg.widescreen = atoi(v) != 0 || !strcmp(v, "on") || !strcmp(v, "yes");
+        else if (!strcmp(k, "aspect")) cfg.widescreen = !strcmp(v, "classic") ? ASPECT_CLASSIC : ASPECT_WIDE;
+        else if (!strcmp(k, "hud")) cfg.hud = !strcmp(v, "immersive") ? HUD_IMMERSIVE
+                                            : !strcmp(v, "immersive_alt") ? HUD_IMMERSIVE_ALT
+                                            : !strcmp(v, "off") ? HUD_OFF : HUD_CLASSIC;
+        else if (!strcmp(k, "widescreen")) {     /* older files: 0 off, 1 on (2 = wide + immersive, briefly) */
+            int n = atoi(v);
+            cfg.widescreen = n != 0 || !strcmp(v, "on") || !strcmp(v, "yes") ? ASPECT_WIDE : ASPECT_CLASSIC;
+            if (n == 2) cfg.hud = HUD_IMMERSIVE;
+        }
         else if (!strcmp(k, "volume")) { int n = atoi(v); if (n >= 0 && n <= 5) cfg.volume = n; }
         else if (!strcmp(k, "episode")) { int e = atoi(v); if (e >= 1 && e <= 3) cfg.episode = e; }
         else if (!strcmp(k, "sound")) cfg.sound = !strcmp(v, "original") ? SND_ORIGINAL : !strcmp(v, "hifi") ? SND_HIFI : SND_OVERLAP;
         else if (!strcmp(k, "fullscreen")) cfg.fullscreen = atoi(v) != 0 || !strcmp(v, "yes");
         else if (!strcmp(k, "deadzone")) { int d = atoi(v); if (d >= 0 && d < 32767) cfg.deadzone = d; }
         else if (!strcmp(k, "key.quicksave")) { long c = strtol(v, NULL, 0); if (c > 0 && c < 0x80) cfg.key_qsave = (uint8_t)c; }
+        else if (!strcmp(k, "key.hud")) { long c = strtol(v, NULL, 0); if (c > 0 && c < 0x80) cfg.key_hud = (uint8_t)c; }
         else if (!strcmp(k, "key.quickload")) { long c = strtol(v, NULL, 0); if (c > 0 && c < 0x80) cfg.key_qload = (uint8_t)c; }
         else if (!strncmp(k, "pad.", 4)) {
             for (i = 0; i < PADACT_COUNT; i++) {
@@ -162,13 +173,19 @@ void cfg_save(const char *path)
     fprintf(f, "# scaling: sharp (every pixel the same size) | nearest (plain nearest-neighbour; sizes can vary)\n");
     fprintf(f, "scaling = %s\n", cfg.scaling == SCALE_NEAREST ? "nearest" : "sharp");
     fprintf(f, "# show_fps: frame rate in the window title\nshow_fps = %d\n", cfg.show_fps);
-    fprintf(f, "# widescreen: in Enhanced mode, widen the play area to the window's shape\n");
-    fprintf(f, "widescreen = %d\n", cfg.widescreen);
+    fprintf(f, "# aspect: in Enhanced mode: classic (4:3) | wide (the picture follows the window's shape)\n");
+    fprintf(f, "aspect = %s\n", cfg.widescreen ? "wide" : "classic");
+    fprintf(f, "# hud: in Enhanced mode: classic (border and status panel) | immersive (the play area fills the screen,\n"
+               "# the bar over it) | immersive_alt (the play area ends just above the bar, which sits on black)\n"
+               "# | off (immersive, no bar at all)\n");
+    fprintf(f, "hud = %s\n", cfg.hud == HUD_IMMERSIVE ? "immersive" : cfg.hud == HUD_IMMERSIVE_ALT ? "immersive_alt"
+                              : cfg.hud == HUD_OFF ? "off" : "classic");
     fprintf(f, "# sound: in Enhanced mode: original (one voice, as DN1.EXE) | overlap (effects overlap) | hifi (overlap + reworked sounds)\n");
     fprintf(f, "sound = %s\n", cfg.sound == SND_ORIGINAL ? "original" : cfg.sound == SND_OVERLAP ? "overlap" : "hifi");
     fprintf(f, "scale = %d\nfullscreen = %d\ndeadzone = %d\n", cfg.scale, cfg.fullscreen, cfg.deadzone);
     fprintf(f, "# quicksave / quickload keys as PC scancodes (0x3f = F5, 0x43 = F9)\n");
     fprintf(f, "key.quicksave = 0x%02x\nkey.quickload = 0x%02x\n", cfg.key_qsave, cfg.key_qload);
+    fprintf(f, "# HUD toggle in play (Off <-> Immersive), scancode (0x0f = Tab)\nkey.hud = 0x%02x\n", cfg.key_hud);
     fprintf(f, "# controller: pad.<action> = button[, second button]\n");
     fprintf(f, "# buttons: a b x y back start leftshoulder rightshoulder leftstick rightstick dpup dpdown dpleft dpright none\n");
     for (i = 0; i < PADACT_COUNT; i++) {

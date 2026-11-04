@@ -61,6 +61,10 @@ void sound_load_bank(const char *a, const char *b)
 /* 0097:0042 */
 void play_sound(int n)
 {
+    {   /* test aid: SNDLOG=1 prints every sound started */
+        static int chk, on; if (!chk) { chk = 1; on = getenv("SNDLOG") != NULL; }
+        if (on) printf("snd %d\n", n);
+    }
     port_sound_play(n);             /* Enhanced mixer (no effect on the logic below) */
     if (sound_prio[n] >= snd_prio_cur) {
         snd_prio_cur = sound_prio[n];

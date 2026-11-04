@@ -12,6 +12,7 @@ void keyboard_isr(uint8_t sc)
 {
     last_scancode = sc;
     if (sc && (sc == cfg.key_qsave || sc == cfg.key_qload)) port_qs_request = sc;   /* (port) */
+    if (sc && sc == cfg.key_hud) port_hud_request = 1;                              /* (port) */
     if (boss_dead == 0 && exit_stage == 0 && !joystick_mode && demo_play == 0 &&
         tele_a_busy == 0 && tele_b_busy == 0) {
         uint8_t *flag[6];

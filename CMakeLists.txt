@@ -15,7 +15,7 @@ set(DN1_CORE
     src/frontend.c src/main.c src/port_cfg.c src/port_menu.c
     src/port_options.c src/port_qsave.c src/port_labels.c
     src/port_render.c src/port_sound.c
-    src/episode_map.c src/port_art.c src/port_log.c)
+    src/episode_map.c src/port_art.c src/port_log.c src/port_hud.c)
 
 # Playable build (SDL2): techbot(.exe).  (Not "dn1": on Windows that would be
 # the same file name as the original DN1.EXE, which the port reads at

@@ -91,7 +91,7 @@ void act_ffields_h(void)
         } else {
             draw_obj(ffh_anim + 0x1F40, f->x, f->y);
         }
-        if (anim_tick == 0) play_sound(0x15);
+        if (anim_tick == 0 && !unheard(f->x, f->y)) play_sound(0x15);   /* (port: unheard) */
     }
 }
 
@@ -113,7 +113,7 @@ void act_ffields_v(void)
         if (player_touches(x + 1, y) && in_left && can_walk_right()) player_x++;
         if (player_touches(x - 1, y) && in_right && can_walk_left()) player_x--;
         draw_obj(ffv_anim + 0x28A0, x, y);
-        if (anim_tick == 0) play_sound(0x15);
+        if (anim_tick == 0 && !unheard(x, y)) play_sound(0x15);         /* (port: unheard) */
     }
 }
 

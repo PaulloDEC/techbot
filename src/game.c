@@ -259,6 +259,7 @@ void load_level(const char *name)
 {
     dl_reset();                          /* (port) smooth motion starts afresh */
     clear_eshots();
+    shots_spent_clear();                 /* (port) */
     level_done = 0;
     anim_tick = 0;
     shots_blocked = 0;
