@@ -277,11 +277,12 @@ void ui_options(int x)
             if (cfg.smooth && cfg.mode != MODE_ENHANCED) strcpy(sm, "Enh. only");
             row(x, 13, "Smoothing", sm);
         }
-        row(x, 14, "Aspect", !cfg.widescreen ? "Classic" : cfg.mode == MODE_ENHANCED ? "Wide" : "Enh. only");
+        row(x, 14, "Aspect", !cfg.widescreen ? "Classic" : cfg.mode != MODE_ENHANCED ? "Enh. only"
+                               : cfg.widescreen == ASPECT_16_9 ? "Wide (16:9)" : "Wide (Fill)");
         row(x, 15, "HUD", !cfg.hud ? "Classic" : cfg.mode != MODE_ENHANCED ? "Enh. only"
-                            : cfg.hud == HUD_IMMERSIVE ? "Immersive" : cfg.hud == HUD_OFF ? "Off" : "Immersive Alt");
-        row(x, 16, "Sound", !cfg.sound ? "Original" : cfg.mode != MODE_ENHANCED ? "Enh. only"
-                              : cfg.sound == SND_OVERLAP ? "Overlap" : "Hi-fi");
+                            : cfg.hud == HUD_IMMERSIVE ? "Slim Overlay" : cfg.hud == HUD_OFF ? "Off" : "Slim Fixed");
+        row(x, 16, "Sound", !cfg.sound ? "Classic" : cfg.mode != MODE_ENHANCED ? "Enh. only"
+                              : cfg.sound == SND_OVERLAP ? "Improved" : "Wacky");
         row(x, 17, "Controller", NULL);
         row(x, 18, "Keyboard", NULL);
         row(x, 19, "Done", NULL);
@@ -310,7 +311,14 @@ void ui_options(int x)
             cfg.smooth = steps[cur];
             break;
         }
-        case 6: cfg.widescreen = !cfg.widescreen; pf_apply_settings(); break;
+        case 6: {                                   /* Classic -> Wide (16:9) -> Wide (Fill) */
+            static const int order[3] = { ASPECT_CLASSIC, ASPECT_16_9, ASPECT_WIDE };
+            int k2 = 0;
+            while (k2 < 3 && order[k2] != cfg.widescreen) k2++;
+            cfg.widescreen = order[(k2 + (dir < 0 ? 2 : 1)) % 3];
+            pf_apply_settings();
+            break;
+        }
         case 7: cfg.hud = (cfg.hud + (dir < 0 ? 3 : 1)) % 4; pf_apply_settings(); break;
         case 8: cfg.sound = (cfg.sound + (dir < 0 ? 2 : 1)) % 3; break;
         case 9: if (!dir) controller_menu(x); break;

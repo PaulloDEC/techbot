@@ -107,7 +107,7 @@ static void title_menu(void)
             return;
         }
         if (choice == 3 && restore_menu(7)) {                  /* restore */
-            restoring_game = 1;
+            restoring_game = !port_resume_qs;  /* (port) the quicksave: see new_game */
             demo_play = 0;
             demo_record = 0;
             if (hints_on == 1) set_all_hints(1);

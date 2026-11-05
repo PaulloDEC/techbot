@@ -126,34 +126,49 @@ int ui_menu_wait_idle(const MenuItem *items, int n, int *sel, long *idle, long l
     return select_loop(items, n, sel, idle, limit);
 }
 
+/* level number for a save made at level_index lvl (saves are made in the
+ * hallway before a level: show that level) */
+static int level_no(int lvl) { return lvl % 2 ? (lvl + 1) / 2 + 1 : lvl / 2 + 1; }
+
 /* ---- save-slot picker: a dialog box listing slots 1-9 with the level and
- * score stored in each file.  Digits still pick a slot directly. */
+ * score stored in each file.  Digits still pick a slot directly.  Restoring,
+ * the quicksave (if there is one) heads the list as "Q": returns 10. */
 int ui_pick_slot(int x, int saving)
 {
     static int last_sel = 0;
-    MenuItem it[9];
+    MenuItem it[10];
     char buf[32];
-    int i, lvl, first_used = -1, first_free = -1, sel;
+    int i, lvl, first_used = -1, first_free = -1, sel, qs, top, n;
     long sc;
+    qs = !saving && port_qs_info(&lvl, &sc);
+    top = qs ? 10 : 9;                     /* first slot's row */
     WRITE_MODE_LATCH();
     ui_box(x, 2, 8);                       /* same size as the main menu box it covers */
     WRITE_MODE_NORMAL();
-    ui_text(saving ? "Save your game" : "Restore a game", x + 6, 7);
+    ui_text(saving ? "Save your game" : "Restore a game", x + 6, qs ? 6 : 7);
+    n = 0;
+    if (qs) {
+        snprintf(buf, sizeof buf, "Q  Level %-2d %8ld", level_no(lvl), sc);
+        ui_text(buf, x + 4, 8);
+        it[n].col = (uint8_t)(x + 2); it[n].row = 8; it[n].key = 0x10; n++;   /* Q */
+    }
     for (i = 0; i < 9; i++) {
         if (save_slot_info(i + 1, &lvl, &sc)) {
             /* saves are only made in the hallway before a level: show that level */
-            snprintf(buf, sizeof buf, "%d  Level %-2d %8ld", i + 1, (lvl + 1) / 2 + 1, sc);
+            snprintf(buf, sizeof buf, "%d  Level %-2d %8ld", i + 1, level_no(lvl), sc);
             if (first_used < 0) first_used = i;
         } else {
             snprintf(buf, sizeof buf, "%d  - empty -", i + 1);
             if (first_free < 0) first_free = i;
         }
-        ui_text(buf, x + 4, 9 + i);
-        it[i].col = (uint8_t)(x + 2); it[i].row = (uint8_t)(9 + i); it[i].key = (uint8_t)(2 + i);
+        ui_text(buf, x + 4, top + i);
+        it[n].col = (uint8_t)(x + 2); it[n].row = (uint8_t)(top + i); it[n].key = (uint8_t)(2 + i); n++;
     }
-    sel = last_sel;
-    if (!saving && first_used >= 0 && !save_slot_info(sel + 1, &lvl, &sc)) sel = first_used;
-    select_loop(it, 9, &sel, NULL, 0);
+    /* the cursor starts on the quicksave if there is one, else as before */
+    sel = qs ? 0 : last_sel;
+    if (!qs && !saving && first_used >= 0 && !save_slot_info(sel + 1, &lvl, &sc)) sel = first_used;
+    select_loop(it, n, &sel, NULL, 0);
+    if (qs && last_scancode == 0x10) return 10;
     if (last_scancode >= 2 && last_scancode <= 0x0A) {
         last_sel = last_scancode - 2;
         return last_scancode - 1;

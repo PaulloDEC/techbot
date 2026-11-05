@@ -311,7 +311,9 @@ static Layout layout(int w)
     double s;
     SDL_GetRendererOutputSize(ren, &dw, &dh);
     if (dw <= 0 || dh <= 0) { dw = 320; dh = 240; }
-    if (!w) w = want_wide() ? (int)(240.0 * dw / dh) & ~7 : 320;
+    /* Wide (16:9): always 424 x 200 (displayed 424 x 240), letterboxed or
+     * pillarboxed on other shapes; Wide (Fill): the display's own shape */
+    if (!w) w = !want_wide() ? 320 : cfg.widescreen == ASPECT_16_9 ? 424 : (int)(240.0 * dw / dh) & ~7;
     if (w < 320) w = 320;
     if (w > MAX_W) w = MAX_W;
     s = (double)dw / w < (double)dh / 240.0 ? (double)dw / w : (double)dh / 240.0;
@@ -967,7 +969,8 @@ int main(int argc, char **argv)
     cfg_load(game_path(PORT_CFG_FILE));                   /* command line overrides it */
     port_log("settings: mode %s, aspect %s, hud %s, smoothing %d, scaling %s, sound %d, volume %d, fullscreen %d, scale %d, episode %d",
              cfg.mode == MODE_ENHANCED ? "enhanced" : "original",
-             cfg.widescreen ? "wide" : "classic", cfg.hud == HUD_IMMERSIVE ? "immersive" : cfg.hud == HUD_OFF ? "off" : cfg.hud ? "immersive_alt" : "classic", cfg.smooth,
+             cfg.widescreen == ASPECT_16_9 ? "wide_16_9" : cfg.widescreen ? "wide_fill" : "classic",
+             cfg.hud == HUD_IMMERSIVE ? "slim_overlay" : cfg.hud == HUD_OFF ? "off" : cfg.hud ? "slim_fixed" : "classic", cfg.smooth,
              cfg.scaling == SCALE_NEAREST ? "nearest" : "sharp", cfg.sound, cfg.volume, cfg.fullscreen, cfg.scale, cfg.episode);
     if (scale < 1) scale = cfg.scale;
     if (fullscreen < 0) fullscreen = cfg.fullscreen;

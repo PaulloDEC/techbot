@@ -66,7 +66,7 @@ static const char *qsv_name(void)
 static FILE *qsv_open_read(void)
 {
     char old[16];
-    FILE *f = qsv_open_read();
+    FILE *f = fopen(game_path(qsv_name()), "rb");
     if (f) return f;
     snprintf(old, sizeof old, "DN%dPORT.QSV", episode);
     return fopen(game_path(old), "rb");
@@ -94,6 +94,36 @@ static void message(const char *line)
 
 static void put32(FILE *f, uint32_t v) { fputc(v & 0xFF, f); fputc((v >> 8) & 0xFF, f); fputc((v >> 16) & 0xFF, f); fputc(v >> 24, f); }
 static uint32_t get32(FILE *f) { uint32_t v = (uint32_t)fgetc(f); v |= (uint32_t)fgetc(f) << 8; v |= (uint32_t)fgetc(f) << 16; v |= (uint32_t)fgetc(f) << 24; return v; }
+
+/* ---- the quicksave in the restore list: its level and score, read from
+ * the snapshot (the globals block, in state_map order) */
+int port_qs_info(int *lvl_index, long *sc)
+{
+    const StateVar *v;
+    char m[8];
+    long off = 8 + 16;
+    int got = 0;
+    FILE *f = qsv_open_read();
+    if (!f) return 0;
+    if (fread(m, 8, 1, f) != 1 || memcmp(m, magic, 8) || get32(f) != QS_VERSION ||
+        get32(f) != globals_size() || get32(f) != heap_arena_size || get32(f) != ega_regs_size()) { fclose(f); return 0; }
+    for (v = state_map; v->name; v++) {
+        if (!strcmp(v->name, "level_index") || !strcmp(v->name, "score")) {
+            uint8_t b[4] = { 0, 0, 0, 0 };
+            fseek(f, off, SEEK_SET);
+            if (fread(b, v->size < 4 ? v->size : 4, 1, f) != 1) break;
+            if (v->name[0] == 'l') { *lvl_index = (int16_t)(b[0] | b[1] << 8); got |= 1; }
+            else { *sc = (long)(int32_t)((uint32_t)b[0] | (uint32_t)b[1] << 8 | (uint32_t)b[2] << 16 | (uint32_t)b[3] << 24); got |= 2; }
+        }
+        off += v->size;
+    }
+    fclose(f);
+    return got == 3;
+}
+
+/* chosen from the restore list: start the game as a restore does, then load
+ * the snapshot before the first frame of play (see play_level_loop) */
+int port_resume_qs;
 
 void port_quicksave(void)
 {
@@ -124,7 +154,7 @@ void port_quicksave(void)
     message(i ? "Could not save!" : "Game saved.");
 }
 
-void port_quickload(void)
+int port_quickload(void)
 {
     const StateVar *v;
     uint8_t regs[64], idx[100], *globals, *arena, *planes;
@@ -133,8 +163,8 @@ void port_quickload(void)
     uint16_t sp;
     uint8_t shot;
     int i, ok;
-    FILE *f = fopen(game_path(qsv_name()), "rb");
-    if (!f) { message("No quicksave yet."); return; }
+    FILE *f = qsv_open_read();
+    if (!f) { message("No quicksave yet."); return 0; }
     ok = fread(m, 8, 1, f) == 1 && !memcmp(m, magic, 8) && get32(f) == QS_VERSION &&
          get32(f) == gsz && get32(f) == heap_arena_size && get32(f) == ega_regs_size();
     globals = (uint8_t *)malloc(gsz);
@@ -166,4 +196,5 @@ void port_quickload(void)
     }
     free(globals); free(arena); free(planes);
     message(ok ? "Game loaded." : "Quicksave unusable.");
+    return ok;
 }

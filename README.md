@@ -1,32 +1,5 @@
 # Techbot - An Enhanced PC Port of Duke Nukem
 
-**AI Disclosure: Pretty much the entire project was created by Claude AI. Widescreen-enhanced backdrop artwork is the primary exception.**
-
-## The Human Bit
-
-Techbot brings the original Duke Nukem DOS game to modern Windows with 
-a host of optional enhancements. Play the game the classic way, or take advantage 
-of new features including:
-
- - Support for widescreen displays
- - Multiple HUD options ranging from authentic to minimal
- - Full controller support, including menus
- - Fully re-bindable controls
- - In-game episode switching
- - Interpolation for smoother motion
- - Backdrop artwork extended (by hand, by a human) for widescreen play
- - Improved sound playback
- - Quicksave and Quickload
- 
- There might be more! I  honestly can't remember.
-
-If you're asking "Why?" about all of this, it's a valid question. Like many projects, this
-one started out simply because I had a couple of weeks of Claude to burn, and I was
-curious. Eventually it became clear that the project was going to be good enough to
-share, and so here we are.
-
-## The AI Bit (everything below this point)
-
 Techbot (named after Dr. Proton's robot henchmen) is an enhanced PC port of
 Duke Nukem (1991), all three episodes, built on a complete decompilation of
 the original.
@@ -41,6 +14,29 @@ pixel match frame-for-frame (details below).
 **No game data is included.**  Graphics, levels, sounds, text and constant
 tables are read at runtime from your own copy of the game, including
 `DN1.EXE` itself (unpacked in memory by `src/exe.c`).
+
+## Options
+
+Techbot plays exactly like the original in **Original** game mode.  In
+**Enhanced** mode these settings (Options menu) shape how it looks and sounds:
+
+**Aspect**
+- **Classic** - a 4:3 presentation, just like the original
+- **Wide (16:9)** - a modern 16:9 presentation (the default)
+- **Wide (Fill)** - an ultrawide presentation that fills your display
+
+**HUD**
+- **Classic** - just like the original
+- **Slim Overlay** - a slimline HUD, displayed over a full-screen playfield
+- **Slim Fixed** - a slimline HUD, displayed in a fixed panel below the playfield
+- **Off** - no HUD at all, with a full-screen playfield (Tab toggles it in play)
+
+**Sound**
+- **Classic** - just like the original
+- **Improved** - authentic, but improved under the hood (the default)
+- **Wacky** - an experimental variant
+
+See BUILDING.md for the details of each.
 
 ## Layout
 
@@ -66,8 +62,8 @@ src/            the decompiled game (C99)
   port.h, port_*.c port enhancements around the game: TECHBOT.CFG settings,
                   cursor menus, save-slot picker, Options/remapping, quicksave,
                   controller button names, smooth motion (port_render.c),
-                  overlapping / hi-fi sound (port_sound.c), widescreen
-                  replacement art (port_art.c)
+                  Improved / Wacky sound (port_sound.c), widescreen
+                  replacement art (port_art.c), the Slim HUD (port_hud.c)
   third_party/    stb_image.h (public-domain PNG decoder, v2.30)
   pf_sdl.c        SDL2 platform layer (playable build, controller input)
   pf_headless.c   deterministic platform layer for automated testing
@@ -144,4 +140,3 @@ then `python3 tools/cmp_state.py ref.bin port.bin src/globals.def`.
   game port / scancodes directly in the original; the port maps a modern game
   controller instead (`pf_sdl.c`) and keeps KEYS.DN1 compatibility.
 * Episode 1 only (the level/backdrop name tables come from this EXE).
-

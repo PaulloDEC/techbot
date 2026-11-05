@@ -361,9 +361,11 @@ void new_game(void)
     }
     port_level_intro = 1;                /* (port) widescreen: lay the play screen out wide already */
     ui_status_panel();
-    ui_get_ready();
-    ui_frame();
-    ui_fade_in(0x14);
+    if (!port_resume_qs) {               /* (port) resuming the quicksave: it brings its own */
+        ui_get_ready();                  /* screen and palette as play starts            */
+        ui_frame();
+        ui_fade_in(0x14);
+    }
     if (demo_record == 2 || demo_play == 2) level_index = 0x14;
     load_level(ds_farstr((uint16_t)(0x3A4 + level_index * 4)));
     sc = score; score = 0;

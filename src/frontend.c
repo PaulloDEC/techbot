@@ -361,11 +361,16 @@ int main_menu(int x)
 /* 0097:0126  "restore which game?" -> 1 if a slot 1..9 was chosen */
 int restore_menu(int x)
 {
+    int lvl; long sc;
+    port_resume_qs = 0;
     if (cfg.cursor_menus) {                 /* (port) slot picker instead of "1-9?" */
         int s = ui_pick_slot(x, 0);
+        if (s == 10) { port_resume_qs = 1; return 1; }        /* (port) the quicksave */
         last_scancode = (uint8_t)(s ? s + 1 : 0);
     } else
         dlg_restore_prompt(x);
+    /* (port) Q at the "1-9?" prompt: the quicksave too */
+    if (last_scancode == 0x10 && port_qs_info(&lvl, &sc)) { port_resume_qs = 1; return 1; }
     if (last_scancode >= 2 && last_scancode <= 0x0A) {
         save_slot = (uint8_t)(last_scancode + 0x2F);
         return 1;

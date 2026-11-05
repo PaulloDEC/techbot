@@ -122,3 +122,15 @@ static const char *swap_word(const char *s, const char *word, const char *repl, 
     }
     return out;
 }
+
+/* the line under a yes/no question when a controller is in use: which
+ * button answers which (confirm = south = yes, back = east = no) */
+const char *port_yesno_hint(void)
+{
+    if (input_device != DEV_PAD) return NULL;
+    switch (pad_style) {
+    case PAD_STYLE_PLAYSTATION: return "X = YES    O = NO";
+    case PAD_STYLE_NINTENDO:    return "B = YES    A = NO";
+    default:                    return "A = YES    B = NO";
+    }
+}

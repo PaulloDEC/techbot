@@ -88,6 +88,7 @@ void hint_soda(void);
  * saved as dlg_<n>.ppm (test aid for the DN2/DN3 text routines) */
 void ui_show_intro_a(void), ui_show_intro_b(void), dlg_end_1(void), dlg_end_2(void), dlg_end_3(void),
      dlg_end_4(void), dlg_end_5(void), dlg_episode_text(void), dlg_to_be_continued(int), ui_clear_page0(void);
+int  dlg_confirm_quit(int x);
 static void dlg_shots(void)
 {
     static void (*const f[])(void) = { ui_show_intro_a, ui_show_intro_b, dlg_end_1, dlg_end_2, dlg_end_3, dlg_end_4, dlg_end_5 };
@@ -103,6 +104,10 @@ void pf_test_midframe(void)
 {
     static long done = -1;
     if (getenv("HINT_AT") && atol(getenv("HINT_AT")) == frame_no && done != frame_no) { done = frame_no; hint_soda(); }
+    /* QUIT_AT=frame: the quit question over play, saved as quit_<n>.ppm */
+    if (getenv("QUIT_AT") && atol(getenv("QUIT_AT")) == frame_no && done != frame_no) {
+        done = frame_no; shot_prefix = "quit"; dlg_auto = 1; dlg_confirm_quit(2); pf_exit(0);
+    }
     if (getenv("DLG_AT") && atol(getenv("DLG_AT")) == frame_no && done != frame_no) { done = frame_no; dlg_shots(); }
 }
 void pf_apply_settings(void) { }
@@ -195,8 +200,20 @@ static void dl_check(void)
 /* --wide W: Enhanced widescreen at picture width W; --wideshot F,F,...
  * writes the composed wide picture after those frames (PPM) */
 static long wshots[32]; static int n_wshots;
+static const char *test_letters;     /* --test-letters: D/U/K/E collected (the HUD box) */
+static void apply_test_letters(void)
+{
+    int i, e = 0;
+    if (!test_letters) return;
+    letter_count = 0;
+    for (i = 0; test_letters[i]; i++)
+        if (test_letters[i] == 'E') e = 1; else if (letter_count < 3) letter_seq[letter_count++] = test_letters[i];
+    n_letters = 4;
+    for (i = 0; i < 4; i++) letters[i].s = (int16_t)(i < letter_count + e ? 0 : 'X');
+}
 static void wide_shot(void)
 {
+    apply_test_letters();
     static uint8_t out[640 * 200];
     char name[64]; FILE *f; int i, k;
     for (k = 0; k < n_wshots; k++) if (wshots[k] == frame_no) break;
@@ -315,6 +332,9 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--wide") && i + 1 < argc) {
             wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = ASPECT_WIDE; cfg.hud = HUD_CLASSIC; cfg.smooth = 0;
             dl_set_view(1, wide_w - 112, 160);
+        }
+        else if (!strcmp(argv[i], "--test-letters") && i + 1 < argc) {   /* e.g. "DK": as if collected */
+            test_letters = argv[++i];
         }
         else if (!strcmp(argv[i], "--hud-off") && i + 1 < argc) {        /* Immersive without the bar */
             wide_w = atoi(argv[++i]); cfg.mode = MODE_ENHANCED; cfg.widescreen = wide_w > 320; cfg.hud = HUD_OFF; cfg.smooth = 0;

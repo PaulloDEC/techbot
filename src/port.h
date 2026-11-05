@@ -14,12 +14,14 @@
  * the original's own .DN1 files are never touched by port options. */
 enum { MODE_ORIGINAL = 0, MODE_ENHANCED = 1 };
 enum { SCALE_SHARP = 0, SCALE_NEAREST = 1 };
-enum { SND_ORIGINAL = 0, SND_OVERLAP = 1, SND_HIFI = 2 };
+enum { SND_ORIGINAL = 0, SND_OVERLAP = 1, SND_HIFI = 2 };   /* shown: Classic, Improved, Wacky */
 enum { PAD_NONE = -1 };
 /* Aspect - Classic: the original 4:3 picture; Wide: the picture follows the
  * window's shape.  HUD - Classic: the original border and status panel
  * (widened in Wide); Immersive: the play area is the whole picture. */
-enum { ASPECT_CLASSIC = 0, ASPECT_WIDE = 1 };
+/* shown: Classic, Wide (Fill), Wide (16:9) - the menu steps Classic, 16:9, Fill */
+enum { ASPECT_CLASSIC = 0, ASPECT_WIDE = 1, ASPECT_16_9 = 2 };
+/* shown: Classic, Slim Overlay, Slim Fixed, Off */
 enum { HUD_CLASSIC = 0, HUD_IMMERSIVE = 1, HUD_IMMERSIVE_ALT = 2, HUD_OFF = 3 };
 /* (Immersive Alt: the same bar on a black band, the play area ending just
  * above it instead of running on behind it.  Off: Immersive with no bar.) */
@@ -39,7 +41,7 @@ typedef struct {
     uint8_t key_qsave, key_qload; /* keyboard scancodes for quicksave / quickload        */
     uint8_t key_hud;       /* in play: HUD Off <-> Immersive (or Immersive Alt)           */
     int smooth;            /* Enhanced mode in-between frames: 0 off, 30/60/120 fps, -1 = display rate */
-    int widescreen;        /* Enhanced mode aspect: ASPECT_CLASSIC / ASPECT_WIDE             */
+    int widescreen;        /* Enhanced mode aspect: ASPECT_CLASSIC / ASPECT_WIDE (fill) / ASPECT_16_9 */
     int hud;               /* Enhanced mode HUD: HUD_CLASSIC / HUD_IMMERSIVE / HUD_IMMERSIVE_ALT */
     int sound;             /* Enhanced mode: SND_ORIGINAL / SND_OVERLAP / SND_HIFI         */
     int episode;           /* 1..3: which DNx.EXE to start (the folder may hold all three) */
@@ -108,7 +110,10 @@ void port_switch_episode(int e);         /* saves, then restarts in episode e */
 extern int port_start_at_menu;           /* set after a switch: skip the title wait */
 /* quicksave / quickload (one slot per episode, TECHBOTn.QSV); called from the play loop */
 void port_quicksave(void);
-void port_quickload(void);
+int  port_quickload(void);                        /* 1 if loaded */
+int  port_qs_info(int *lvl_index, long *score);   /* is there a usable quicksave? */
+const char *port_yesno_hint(void);                /* "A = YES  B = NO" with a controller, else NULL */
+extern int port_resume_qs;                        /* load it as play starts       */
 /* latched quicksave/quickload key press (set by the keyboard handler, taken by
  * the play loop): a press is never lost to a later key event in the same frame */
 extern volatile uint8_t port_qs_request;

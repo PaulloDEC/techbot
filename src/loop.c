@@ -17,6 +17,8 @@ void ui_text(const char *s, int x, int row);
 void ui_wait_cursor(int x, int row);
 void ui_clear_page0(void);
 void ui_frame(void);
+void ui_get_ready(void);
+void ui_fade_in(int d);
 void ui_marquee(void);
 int  ui_confirm_restart(void);
 int  ui_confirm_quit(int x);
@@ -77,6 +79,12 @@ void play_level_loop(void)
     if (demo_play) last_scancode = 0;
     port_qs_request = 0;                 /* (port) ignore presses made before play */
     port_hud_request = 0;
+    if (port_resume_qs) {                /* (port) chosen from the restore list */
+        port_resume_qs = 0;
+        if (!port_quickload()) {         /* unusable: carry on with the new game */
+            ui_get_ready(); ui_frame(); ui_fade_in(0x14);
+        }
+    }
 
 resume:
     for (;;) {

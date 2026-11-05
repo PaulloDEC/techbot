@@ -5,6 +5,7 @@
  * own DN1.EXE (ds_str), never copied.
  */
 #include "dn1.h"
+#include <string.h>
 
 void ui_box(int x, int row, int h);
 void ui_text(const char *s, int x, int row);
@@ -799,9 +800,14 @@ void ui_cheat_msg(void)
 /* 108E:3D1E */
 void dlg_confirm_quit_v(int x)
 {
-    ui_box(x, 5, 1);
+    /* (port) with a controller, a line naming the yes and no buttons: the
+     * box is one row taller for it (it is drawn where the screen is redrawn
+     * afterwards anyway - over play, or inside the main menu's box) */
+    const char *hint = port_yesno_hint();
+    ui_box(x, 5, hint ? 2 : 1);
     ui_text(ds_str(0x44d7), x + 1, 0xb);
     ui_text(ds_str(0x44f0), x + 1, 0xc);
+    if (hint) ui_text(hint, x + 1 + (24 - (int)strlen(hint)) / 2, 0xe);
     SPIN_WHILE(last_scancode == 1);
     ui_wait_cursor(x + 0x10, 0xc);
     in_right = 0;
