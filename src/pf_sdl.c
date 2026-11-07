@@ -750,7 +750,16 @@ void pf_delay_ms(unsigned ms)
     while (SDL_GetPerformanceCounter() < end) pf_service();
 }
 
-void pf_frame_hook(void) { }
+/* test aid: TECHBOT_HINT_AT=<ms> shows a hint popup inside the first game
+ * frame after that time (as the game does on a first pickup) */
+void hint_soda(void);
+void pf_frame_hook(void)
+{
+    static int done;
+    const char *h;
+    if (done || !(h = getenv("TECHBOT_HINT_AT"))) return;
+    if (SDL_GetTicks() >= (Uint32)atol(h)) { done = 1; hint_soda(); }
+}
 void pf_test_midframe(void) { }
 
 /* Options menu: window size / fullscreen take effect immediately */

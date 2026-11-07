@@ -97,7 +97,11 @@ void ega_outw(uint16_t port, uint16_t v) { ega_outb(port, (uint8_t)v); ega_outb(
 static uint16_t page_base(void) { return ega_draw_page ? 0x2000 : 0x0000; }
 
 /* 0000:05EB */ void set_draw_page(int p)    { ega_draw_page = p; }
-/* 0000:05F7 */ void set_display_page(int p) { ega_display_page = p; }
+/* 0000:05F7 */ void set_display_page(int p)
+{
+    if (p != ega_display_page) dl_display_flipped();   /* (port) see port_render.c */
+    ega_display_page = p;
+}
 /* 0000:029D  int 10h AX=1000h */
 void set_palette_reg(int reg, int val) { if (reg < 16) ega_palette[reg] = (uint8_t)val; else if (reg == 16) ega_border = (uint8_t)val; }
 

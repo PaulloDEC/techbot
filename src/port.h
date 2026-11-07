@@ -192,6 +192,7 @@ int  dl_frame_ready(void);                /* a recorded frame exists to compose 
  * from the original status panel in EGA memory ('base': the 320x200 page) */
 void hud_draw(uint8_t *out, int w, const uint8_t *base);
 int  hud_bar_top(void);                   /* first picture row the bar covers */
+void dl_display_flipped(void);            /* ega.c: the page on screen changed */
 
 /* ---------------------------------------------------------------- sound
  * port_sound.c: in Enhanced mode effects overlap (several voices) and can be

@@ -1,32 +1,5 @@
 # Techbot - An Enhanced PC Port of Duke Nukem
 
-**AI Disclosure: Pretty much the entire project was created by Claude AI. Widescreen-enhanced backdrop artwork is the primary exception.**
-
-## The Human Bit
-
-Techbot brings the original Duke Nukem DOS game to modern Windows with 
-a host of optional enhancements. Play the game the classic way, or take advantage 
-of new features including:
-
- - Support for widescreen displays
- - Multiple HUD options ranging from authentic to minimal
- - Full controller support, including menus
- - Fully re-bindable controls
- - In-game episode switching
- - Interpolation for smoother motion
- - Backdrop artwork extended (by hand, by a human) for widescreen play
- - Improved sound playback
- - Quicksave and Quickload
- 
- There might be more! I  honestly can't remember.
-
-If you're asking "Why?" about all of this, it's a valid question. Like many projects, this
-one started out simply because I had a couple of weeks of Claude to burn, and I was
-curious. Eventually it became clear that the project was going to be good enough to
-share, and so here we are.
-
-## The AI Bit (everything below this point)
-
 Techbot (named after Dr. Proton's robot henchmen) is an enhanced PC port of
 Duke Nukem (1991), all three episodes, built on a complete decompilation of
 the original.

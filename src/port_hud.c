@@ -6,9 +6,8 @@
  * play) and Immersive Alt (on a black band below it).  The 16:9 bar is used
  * whenever the picture is at least 424 wide, the 4:3 one otherwise (Classic
  * aspect, and Wide windows narrower than 16:9).  Bars are centred; with
- * Immersive the play shows either side, with Alt the band is black - except
- * the 16:9 Alt bar in a wider picture, whose end columns are repeated out to
- * the edges.
+ * Immersive the play shows either side; with Alt the bar's end columns are
+ * repeated out to the edges whenever the picture is wider than the bar.
  *
  * What goes in the bar is taken from the original status panel, which the
  * game keeps drawing into EGA memory as always: health cells, score digits,
@@ -99,8 +98,10 @@ void hud_draw(uint8_t *out, int w, const uint8_t *base)
     if (w < L.w) return;
     bx = (w - L.w) / 2; o = bx + L.o;
     blit(row0, w, L.bar, L.w, 200 - HUD_BAR_TOP, bx, 0);
-    /* the 16:9 Alt bar in a wider picture: its end columns repeated to the edges */
-    if (alt && L.letters && w > L.w)
+    /* an Alt bar in a wider picture: its end columns repeated to the edges
+     * (the 16:9 bar beyond 16:9, and the 4:3 bar in Wide (Fill) windows too
+     * narrow for the 16:9 one) */
+    if (alt && w > L.w)
         for (y = 0; y < 200 - HUD_BAR_TOP; y++) {
             uint8_t l = L.bar[y * L.w], r = L.bar[y * L.w + L.w - 1], *d = row0 + y * w;
             if (l != 255) memset(d, l, (size_t)bx);

@@ -250,6 +250,16 @@ void dl_note_direct(int x, int y, int w, int h)
     direct = 1;
 }
 
+/* The page on screen changed.  Direct drawing and dialogs are tracked only
+ * on the page being shown (they are laid over the wide picture from it), so
+ * whatever they describe has just left the screen: forget them.  Without
+ * this, closing a dialog by flipping back to the other page - as the
+ * original does after "Are you sure you want to quit?  No" - kept copying
+ * the dialog's rectangle from the now-shown page until the next frame
+ * began: a band of the level with its backdrop at the original, unstretched
+ * width where the box had been. */
+void dl_display_flipped(void) { direct = 0; dlgd = 0; }
+
 static int cam_x_now(void) { return scroll_x * 8; }
 static int cam_y_now(void) { return (scroll_y >> 7) * 16; }
 
