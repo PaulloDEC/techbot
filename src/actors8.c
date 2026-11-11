@@ -261,7 +261,8 @@ static void draw_protonscreen(int frame, int x, int y)
 /* 0097:BA39  the Dr. Proton screen (3041h) in the hallways: taunts once */
 void update_monitor(void)
 {
-    if (!protonscreen_present || level_index == 0) return;
+    /* (the game never shows it on its first level; a pack's first level may have one) */
+    if (!protonscreen_present || (level_index == 0 && !pack.on)) return;
     if (++ps_frame == 3) ps_frame = 0;
     ps_timer++;
     if (ps_show) {

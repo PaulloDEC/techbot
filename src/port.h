@@ -108,6 +108,209 @@ void ui_options(int x);
 int  ui_episode_select(int x);
 void port_switch_episode(int e);         /* saves, then restarts in episode e */
 extern int port_start_at_menu;           /* set after a switch: skip the title wait */
+extern int port_start_level;             /* --level: level table index to start at, or -1 */
+int port_parse_level(const char *a, int raw);   /* --level N / --level-index I, -1 if bad */
+
+/* port_state.c: in-memory snapshots of the whole game state */
+typedef struct PortState PortState;
+PortState *port_state_new(void);
+void port_state_free(PortState *s);
+void port_state_save(PortState *s);
+void port_state_load(const PortState *s);
+int  port_state_compare(const PortState *a, const PortState *b);   /* 0 = same */
+uint64_t port_state_hash(const PortState *s);                      /* for tests  */
+/* main.c: called once after start-up (graphics loaded, before the title);
+ * port_restart() unwinds to the top of the title/play loop - restore a
+ * snapshot first.  Play then starts afresh (at port_start_level, if set). */
+extern void (*port_boot_hook)(void);
+void port_restart(void);
+
+/* port_editor.c: what the Shrapnel level editor needs from the game */
+#define ED_MAP_CELLS 0x2D00              /* 128 x 90 */
+#define ED_BD_W 208                      /* backdrop: 13 x 10 tiles */
+#define ED_BD_H 160
+#define ED_ACTOR_END 0x305E              /* actors: 3000h..305Dh (305Ah.. Techbot's loose items) */
+#define ED_LOOSE_FIRST 0x305A            /* loose boots, claws, robot hand, access card */
+#define ED_LOOK_DUKE 0x10000             /* ed_actor_look: keep Duke's own pieces too */
+typedef struct {
+    const uint8_t *src;                  /* a 16x16 masked sprite, or NULL: a tile */
+    uint16_t tile;                       /* tile cache offset, when src is NULL */
+    int dx, dy;                          /* pixels from the actor's cell */
+} EdPiece;
+extern const uint8_t *port_map_override;  /* load_level reads the map from here when set */
+extern int port_god;                     /* editor play-test: no damage */
+extern void (*dl_spy)(int type, const uint8_t *src, uint16_t tile, int col, int line);
+int  ed_boot(void);
+void ed_spin(void);
+int  ed_read_map(const char *name, uint16_t map[ED_MAP_CELLS]);
+#define ED_N_TABLES 42
+int  ed_actor_limit(uint16_t id, int *cap);   /* table (1..41, 0 none) and its size */
+void ed_load(int slot, const uint16_t *map);
+extern int ed_core_used;                 /* bumped whenever the editor's calls reload or play the game */
+void ed_map_after(uint16_t out[ED_MAP_CELLS]);
+void ed_game_view(int sx, int sy, int anim, uint8_t out[320 * 200]);
+void ed_tile(uint16_t t, uint8_t out[256]);
+void ed_backdrop(int which, uint8_t *out);
+const char *ed_stock_drop(int slot, int which);   /* its backdrop files' names */
+const char *ed_stock_note(int slot, int k);   /* a slot's stock note, line k */
+#define ED_NOTE_CHARS 23                 /* a note line, inside the game's box */
+#define ED_NOTE_W 208                    /* ed_note_view: the box, in pixels */
+#define ED_NOTE_H 64
+void ed_note_view(const char *const lines[4], uint8_t *out);
+void ed_sprite(const uint8_t *src, uint8_t out[256]);
+void ed_palette(uint32_t rgb[16]);
+int  ed_actor_look(uint16_t id, EdPiece *out, int max, uint16_t *cell_after);
+int  ed_actor_contents(uint16_t id, EdPiece *out, int max);   /* what a crate holds */
+void port_init_game(void);               /* main.c: the game's start-up (files, graphics, sound) */
+
+/* play-testing in the editor (port_editor.c) */
+typedef struct {
+    int boots, claws, robohand, card;    /* 0/1 */
+    int keys;                            /* bits: 1 red, 2 green, 4 blue, 8 pink */
+    int firepower;                       /* 1..4 */
+    int health;                          /* 1..9 */
+    int god;                             /* no damage */
+} EdLoadout;
+enum { ED_END_NONE, ED_STOP_USER, ED_STOP_CLOSE, ED_STOP_RESTART, ED_STOP_EXIT,
+       ED_END_EXIT, ED_END_DIED, ED_END_BOSS, ED_END_QUIT,
+       ED_END_FEED,                      /* a replay's controls ran out */
+       ED_END_STUCK };                   /* a replay waited for a key that will not come */
+#define ED_INPUTS 65536                  /* a play's controls: an hour at 16 frames a second */
+typedef struct {
+    int end;                             /* how it ended (above) */
+    int x, y;                            /* where Duke was, in level pixels (his feet, centre) */
+    int frames;                          /* game frames played */
+    int trail_n;                         /* his path, one point per frame (up to ED_TRAIL) */
+    int16_t trail[2 * 4096];
+    int inputs_n;                        /* the controls, a byte a frame (1 left 2 right 4 up */
+    uint8_t inputs[ED_INPUTS];           /* 8 down 16 jump 32 fire), as the game read them */
+} EdPlay;
+#define ED_TRAIL 4096
+/* play the map in slot's level-table place, Duke starting at cell (c, r)
+ * (or the map's own start when c < 0), until the level is left, Duke dies,
+ * or the editor stops it; the platform must be live (pf_sdl_play_begin) */
+void ed_play(int slot, const uint16_t *map, int c, int r, const EdLoadout *lo, EdPlay *out);
+/* a replay: ed_play takes Duke's controls from here (a byte a frame, as
+ * EdPlay.inputs), and ends with ED_END_FEED when they run out.  With
+ * ed_play_unseen set it needs no window: it runs as fast as it can, unseen. */
+extern const uint8_t *ed_play_feed;
+extern int ed_play_feed_n;
+extern int ed_play_unseen;
+/* loop.c: called just before Duke moves, each frame of play (or NULL) */
+extern void (*port_frame_input)(void);
+/* Packs (port_pack.c): levels and episodes made in Shrapnel (.LEV / .EPI) */
+#define PACK_NOTE_W 40
+typedef struct {
+    int hallway;
+    uint8_t *map;                        /* 5A00h bytes */
+    char map_name[32];
+    int backdrop;                        /* a level: the pair of stock level 1..10 of the episode */
+    char drop[2][40];                    /* backdrop A / B: a game file or one in the pack ("" = from backdrop) */
+    uint8_t *drop_data[2];               /* ... the pack's own picture */
+    long drop_len[2];
+    char note[4][PACK_NOTE_W + 1];       /* the hallway note / Dr. Proton screen */
+    int has_note;
+} PackEntry;
+typedef struct {
+    int on;
+    char path[1024], stem[64], name[64], author[64];
+    int episode;                         /* whose art: 1..3 */
+    int classic;                         /* made for the DOS game's rules */
+    int ending;                          /* the last level's exit: stock ending 1..3, 0 = ending_text */
+    char ending_text[1024];
+    int n;                               /* entries: level, hallway, level... */
+    PackEntry *e;
+} Pack;
+extern Pack pack;
+int  pack_open(const char *path, char *err, int errlen);
+void pack_close(void);
+const uint8_t *pack_map(int index);
+int  pack_is_last(int index);
+const char *pack_backdrop(int index, int which, const uint8_t **data, long *len);
+const char (*pack_note(int index))[PACK_NOTE_W + 1];
+const char *pack_file_name(const char *stock);   /* saves, scores, demos: kept apart for a pack */
+int  strcasecmp_port(const char *a, const char *b);
+int  strncasecmp_port(const char *a, const char *b, int n);
+#define PACK_FOLDER "LEVELS"              /* in the game folder: the CUSTOM LEVEL list */
+typedef struct { char path[1200], name[64], author[64]; int episode, levels; } PackInfo;
+int  pack_list(PackInfo *out, int max);
+void pf_restart_pack(const char *path);  /* restarts Techbot playing that pack */
+void port_switch_pack(const char *path); /* main.c: saves, then that */
+int  ui_pick_pack(int x);                /* port_options.c: the CUSTOM LEVEL list; 1 if a pack is open to play */
+extern int pack_finished;                /* the pack's last level was left by its exit */
+void pack_ending(void);                  /* frontend.c: the ending PACK.INI names */
+void load_tiles_mem(const uint8_t *data, long len, uint16_t vram, int bytes);   /* files.c */
+/* (Shrapnel) a level's backdrops A and B in place of its slot's: a game file
+ * by name, or a backdrop file's bytes (data, len); none set = the slot's */
+typedef struct { char name[40]; const uint8_t *data; long len; } PortDrop;
+extern PortDrop port_drop[2];
+extern uint8_t port_key_held[128];
+extern int port_card_hold;
+extern int port_text_tile;
+void ui_cursor_hold(uint16_t from);      /* ui.c: the spinning cursor's least step */               /* ui_dialogs.c: the tile a text page (Ordering info...) is filled with, -1 none */              /* files.c: the loading cards' least time, in ticks */       /* input.c: keys down now, by scancode */
+
+/* Reachability (port_reach.c): where Duke can get to in a map, found by
+ * running the game's own movement code over every state he can be in */
+#define ED_ROUTE 16384
+enum { ED_REACH_OK, ED_REACH_NO_START, ED_REACH_TOO_BIG };
+#define ED_REACH_BODY    1               /* cell: Duke can be here (and still finish) */
+#define ED_REACH_TRAPPED 2               /* cell: Duke can be here only where there is no way on to the end */
+#define ED_REACH_TOUCH   4               /* cell (an actor's): Duke can reach it */
+#define ED_REACH_SHOT    8               /* cell: a breakable block the search took as shot away */
+/* EdReach.gates: what Duke can get done somewhere on the way */
+#define ED_GATE_BOOTS    0x0001
+#define ED_GATE_CLAWS    0x0002
+#define ED_GATE_HAND     0x0004
+#define ED_GATE_CARD     0x0008          /* picked up the access card */
+#define ED_GATE_CARDUSE  0x0010          /* used it in the card reader */
+#define ED_GATE_REACTOR  0x0020          /* shot the reactor */
+#define ED_GATE_WALKWAY  0x0040          /* used the hand reader */
+#define ED_GATE_KEY(c)   (0x0100 << (c)) /* got the key: 0 red, 1 green, 2 blue, 3 pink */
+#define ED_GATE_LOCK(c)  (0x1000 << (c)) /* opened that colour's lock */
+#define ED_GATE_BRIDGE   0x30000         /* (the collapsing bridge's state) */
+typedef struct {
+    int boots, claws, robohand;          /* carried in from earlier levels */
+    int max_nodes;                       /* 0: the default limit */
+} EdReachOpts;
+typedef struct {
+    int status;                          /* ED_REACH_* */
+    int nodes, edges;                    /* the size of the search */
+    int goal;                            /* 1 the exit, 2 Dr. Proton, 0 neither */
+    int finish_ok;                       /* the end can be reached */
+    unsigned gates;                      /* everything done somewhere (W_* bits, port_reach.c) */
+    int body_cells, trap_cells;
+    uint8_t cell[ED_MAP_CELLS];          /* ED_REACH_* bits */
+    uint16_t shot[ED_MAP_CELLS];         /* what the search took shooting to leave in a cell (0: unchanged) */
+    int route_n;                         /* one way to the end: Duke's feet, a point a frame */
+    int16_t route[2 * ED_ROUTE];
+    int inputs_n;                        /* ... and the controls that play it, a byte a frame */
+    uint8_t inputs[ED_ROUTE];            /* (1 left 2 right 4 up 8 down 16 jump 32 fire) */
+} EdReach;
+int  ed_reach(int slot, const uint16_t *map, const EdReachOpts *opt, EdReach *out);   /* all at once */
+/* in slices: begin, run until it returns 1 (budget = states expanded per
+ * call), then take the result and end (which frees the search) */
+int  ed_reach_begin(int slot, const uint16_t *map, const EdReachOpts *opt);
+int  ed_reach_run(int budget, int *states);
+void ed_reach_result(EdReach *out);
+void ed_reach_end(void);
+/* nothing is written to the game folder while set (a play-test) */
+extern int port_no_disk;
+/* Shrapnel's movement search is running the game's movement code: no sound,
+ * no dust, nothing drawn (files.c) */
+extern int port_sim;
+extern int port_boxes_open;              /* (Shrapnel self-test) boxed items start shot open */
+void player_motion(void);                /* player.c: Duke's movement for one frame */
+void player_climb_step(void);            /* player.c: one step of a ledge pull-up */
+void recenter_view(void);                /* render.c */
+int  can_walk_left(void);
+int  can_walk_right(void);
+int  head_clear(void);
+int  feet_clear(void);
+void ed_play_stop(int why);              /* platform: end the play-test now */
+void ed_play_frame(void);                /* platform: once per game frame */
+void ed_play_note(const char *what);     /* platform: a helper key was used */
+extern const char *ed_play_message;      /* the last note, for the editor's status bar */
+extern int ed_play_max_frames;           /* test aid: end a play-test after this many frames (0: never) */
 /* quicksave / quickload (one slot per episode, TECHBOTn.QSV); called from the play loop */
 void port_quicksave(void);
 int  port_quickload(void);                        /* 1 if loaded */

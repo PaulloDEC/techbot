@@ -68,6 +68,7 @@ static unsigned serial;
 int dl_dbg_cx, dl_dbg_cy, dl_dbg_obj;   /* test aid: last rendered camera / Duke */
 static int jumplog;                     /* test aid: DL_JUMPLOG set */
 int dl_capturing, dl_in_world, dl_waiting;
+void (*dl_spy)(int type, const uint8_t *src, uint16_t tile, int col, int line);
 static int direct, ddx0, ddy0, ddx1, ddy1;   /* direct drawing since the last frame began */
 static int dlgd, dgx0, dgy0, dgx1, dgy1;     /* ... of which dialogs and text (screen-fixed) */
 int port_in_play;
@@ -285,7 +286,9 @@ void dl_record(int type, const uint8_t *src, uint16_t tile, int col, int line, i
     Op *o;
     int sx = col * 8, w = (type == DL_GLYPH || type == DL_GLYPH_OPAQUE) ? 8 : 16;
     int left = WIN_X0, right = WIN_X0 + WIN_W, top = WIN_Y0, bottom = WIN_Y0 + WIN_H;
-    if (!dl_capturing || dl_in_world || dl_hud || rec->nops >= MAX_OPS) return;
+    if (!dl_capturing || dl_in_world || dl_hud) return;
+    if (dl_spy) { dl_spy(type, src, tile, col, line); return; }   /* the editor watching (port_editor.c) */
+    if (rec->nops >= MAX_OPS) return;
     /* only what goes onto the page being built: popups (hints, level notes,
      * menus) are drawn onto the page on screen, over the game, and vanish when
      * they close - they are shown live by the overlay, never replayed */

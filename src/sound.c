@@ -61,6 +61,7 @@ void sound_load_bank(const char *a, const char *b)
 /* 0097:0042 */
 void play_sound(int n)
 {
+    if (port_sim) return;           /* (port) Shrapnel's movement search: silent */
     {   /* test aid: SNDLOG=1 prints every sound started */
         static int chk, on; if (!chk) { chk = 1; on = getenv("SNDLOG") != NULL; }
         if (on) printf("snd %d\n", n);

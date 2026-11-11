@@ -25,6 +25,19 @@
 
 int pf_headless = 0;
 static void update_view(void);
+
+#ifdef PF_SDL_EMBED
+/* Built into Shrapnel, the level editor (Makefile: -DPF_SDL_EMBED), which
+ * owns the window: no main(), and the platform is live only during a
+ * play-test (pf_sdl_play_begin .. pf_sdl_play_end).  Otherwise the editor is
+ * reading the game (port_editor.c) and the platform functions stand idle;
+ * a busy-wait then goes to ed_spin, which stops a stuck one. */
+static int embed_live;
+extern const char *shrapnel_game_dir;
+#define GAMEDIR shrapnel_game_dir
+#else
+#define GAMEDIR gamedir
+#endif
 int pf_joy_x, pf_joy_y;
 
 static SDL_Window *win;
@@ -44,7 +57,7 @@ static int pad_buttons = 0xFF;
 const char *game_path(const char *name)
 {
     static char buf[1024];
-    snprintf(buf, sizeof buf, "%s/%s", gamedir, name);
+    snprintf(buf, sizeof buf, "%s/%s", GAMEDIR, name);
 #ifndef _WIN32
     {   /* case-insensitive lookup on case-sensitive file systems */
         FILE *f = fopen(buf, "rb");
@@ -53,7 +66,18 @@ const char *game_path(const char *name)
             char low[256]; size_t i;
             for (i = 0; name[i] && i < sizeof low - 1; i++) low[i] = (char)((name[i] >= 'A' && name[i] <= 'Z') ? name[i] + 32 : name[i]);
             low[i] = 0;
-            snprintf(buf, sizeof buf, "%s/%s", gamedir, low);
+            snprintf(buf, sizeof buf, "%s/%s", GAMEDIR, low);
+            f = fopen(buf, "rb");
+            if (f) { fclose(f); return buf; }
+            {   /* or all capitals */
+                char up[256];
+                for (i = 0; low[i]; i++) up[i] = (char)((low[i] >= 'a' && low[i] <= 'z') ? low[i] - 32 : low[i]);
+                up[i] = 0;
+                snprintf(buf, sizeof buf, "%s/%s", GAMEDIR, up);
+                f = fopen(buf, "rb");
+                if (f) { fclose(f); return buf; }
+            }
+            snprintf(buf, sizeof buf, "%s/%s", GAMEDIR, low);    /* none: lower case (a new file) */
         }
     }
 #endif
@@ -236,6 +260,21 @@ static void poll_events(void)
 {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+#ifdef PF_SDL_EMBED
+        if (e.type == SDL_QUIT || (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE)) ed_play_stop(ED_STOP_CLOSE);
+        if (e.type == SDL_KEYDOWN && !e.key.repeat) {
+            switch (e.key.keysym.scancode) {   /* the editor's keys while play-testing */
+            case SDL_SCANCODE_F4: ed_play_stop(ED_STOP_USER); break;
+            case SDL_SCANCODE_F10: ed_play_stop(ED_STOP_RESTART); break;
+            case SDL_SCANCODE_F2: port_god = !port_god; ed_play_note(port_god ? "invulnerable" : "vulnerable"); continue;
+            case SDL_SCANCODE_F3: health = 9; draw_health(); ed_play_note("health refilled"); continue;
+            case SDL_SCANCODE_F1: continue;  /* the help menu's restart would load the game's own saved game */
+            default: break;
+            }
+        }
+        if ((e.type == SDL_KEYUP) && (e.key.keysym.scancode == SDL_SCANCODE_F1 || e.key.keysym.scancode == SDL_SCANCODE_F2 ||
+                                      e.key.keysym.scancode == SDL_SCANCODE_F3)) continue;
+#endif
         switch (e.type) {
         case SDL_QUIT: pf_exit(0); break;
         case SDL_KEYDOWN:
@@ -255,6 +294,7 @@ static void poll_events(void)
         }
         case SDL_WINDOWEVENT:
             if (e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) update_view();
+            if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) memset(port_key_held, 0, sizeof port_key_held);   /* (no key-up comes) */
             break;
         case SDL_CONTROLLERDEVICEADDED:
             if (!pad) { pad = SDL_GameControllerOpen(e.cdevice.which); pad_detect_style(); }
@@ -647,14 +687,39 @@ static int hold_wide(void)
            !dl_frame_ready() && (wide_width() > 320 || want_imm());
 }
 
+/* a text page (Ordering information, the instructions, the story pages) in
+ * widescreen: its tile carries on across the whole width, in step with the
+ * page's own tiling, instead of black bars at the sides */
+static int text_page_wide(const uint8_t *page)
+{
+    static uint8_t out[MAX_W * 200];
+    uint8_t t[256];
+    int w = wide_width(), off, x, y;
+    if (!want_wide() || port_in_play || port_text_tile < 0 || w <= 320 || ega_display_page != 0) return 0;
+    ed_tile((uint16_t)port_text_tile, t);
+    off = (w - 320) / 2;
+    for (y = 0; y < 200; y++)
+        for (x = 0; x < w; x++) {
+            int px = x - off;
+            out[y * w + x] = px >= 0 && px < 320 ? page[y * 320 + px] : t[(y & 15) * 16 + (((px % 16) + 16) & 15)];
+        }
+    out_w = w;
+    show_indexed(out, w, NULL);
+    return 1;
+}
+
 void pf_present(void)
 {
     static uint8_t idx[320 * 200];
+#ifdef PF_SDL_EMBED
+    if (!embed_live) return;
+#endif
     if (too_early()) return;
     if (compose_wide(1.0, 1)) return;
     if (hold_wide()) return;
     out_w = 320;
     ega_present_indexed(idx, ega_display_page);
+    if (text_page_wide(idx)) return;
     picture_with_art(idx);
     show_indexed(idx, 320, NULL);
     pic_art = NULL;
@@ -696,16 +761,20 @@ static void present_smooth(uint64_t now)
  * run the 1193182/8273 Hz timer interrupt in real time */
 void pf_service(void)
 {
-    uint64_t now = SDL_GetPerformanceCounter();
+    uint64_t now;
     int n = 0;
+#ifdef PF_SDL_EMBED
+    if (!embed_live) { timer_isr(); ed_spin(); return; }   /* simulated time: timed waits still end */
+#endif
+    now = SDL_GetPerformanceCounter();
     poll_events();
     {   /* test aid: TECHBOT_KEYS="ms:sc,ms:sc,..." presses scancodes (hex, 80h set
          * = release) at those times after start */
-        static int init; static long at[64]; static int sc[64], nk, k; static uint64_t t0;
+        static int init; static long at[1024]; static int sc[1024], nk, k; static uint64_t t0;
         if (!init) {
             const char *p = getenv("TECHBOT_KEYS");
             init = 1; t0 = now;
-            while (p && *p && nk < 64) { at[nk] = strtol(p, (char **)&p, 10); if (*p == ':') p++; sc[nk++] = (int)strtol(p, (char **)&p, 16); if (*p == ',') p++; }
+            while (p && *p && nk < 1024) { at[nk] = strtol(p, (char **)&p, 10); if (*p == ':') p++; sc[nk++] = (int)strtol(p, (char **)&p, 16); if (*p == ',') p++; }
         }
         while (k < nk && (long)((now - t0) * 1000 / perf_freq) >= at[k]) keyboard_isr((uint8_t)sc[k++]);
     }
@@ -746,7 +815,11 @@ void pf_service(void)
 
 void pf_delay_ms(unsigned ms)
 {
-    uint64_t end = SDL_GetPerformanceCounter() + perf_freq * ms / 1000;
+    uint64_t end;
+#ifdef PF_SDL_EMBED
+    if (!embed_live) return;
+#endif
+    end = SDL_GetPerformanceCounter() + perf_freq * ms / 1000;
     while (SDL_GetPerformanceCounter() < end) pf_service();
 }
 
@@ -757,6 +830,10 @@ void pf_frame_hook(void)
 {
     static int done;
     const char *h;
+#ifdef PF_SDL_EMBED
+    ed_play_frame();                     /* the editor watches each frame of a play-test (or an unseen replay) */
+    return;
+#endif
     if (done || !(h = getenv("TECHBOT_HINT_AT"))) return;
     if (SDL_GetTicks() >= (Uint32)atol(h)) { done = 1; hint_soda(); }
 }
@@ -773,6 +850,10 @@ static void window_size(int scale, int *w, int *h)
 void pf_apply_settings(void)
 {
     if (!win) return;
+#ifdef PF_SDL_EMBED
+    update_view();                       /* the editor's window: its size is the editor's */
+    return;
+#endif
     SDL_SetWindowFullscreen(win, cfg.fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
     if (!cfg.fullscreen) {
         int w, h;
@@ -910,16 +991,26 @@ static const char *name_of_exe(void)
 static char **saved_argv;
 /* main menu > Episode select: start over with cfg.episode (already saved),
  * same arguments minus any --episode, plus --to-menu (skip the title wait) */
-void pf_restart(void)
+static void restart_with(const char *pack_path);
+void pf_restart(void) { restart_with(NULL); }
+/* (port) the CUSTOM LEVEL menu: a pack of another episode's art */
+void pf_restart_pack(const char *path) { restart_with(path); }
+static void restart_with(const char *pack_path)
 {
     static char *a[24];
     int i, n = 0;
+#ifdef PF_SDL_EMBED
+    ed_play_stop(ED_STOP_EXIT);          /* (no episode switching inside the editor) */
+    return;
+#endif
     for (i = 0; saved_argv[i] && n < 21; i++) {
         if (!strcmp(saved_argv[i], "--to-menu")) continue;
-        if (!strcmp(saved_argv[i], "--episode")) { if (saved_argv[i + 1]) i++; continue; }
+        if (!strcmp(saved_argv[i], "--episode") || !strcmp(saved_argv[i], "--level") ||
+            !strcmp(saved_argv[i], "--level-index") || !strcmp(saved_argv[i], "--pack")) { if (saved_argv[i + 1]) i++; continue; }
         a[n++] = saved_argv[i];
     }
-    a[n++] = "--to-menu";
+    if (pack_path) { a[n++] = "--pack"; a[n++] = (char *)pack_path; }
+    else a[n++] = "--to-menu";
     a[n] = NULL;
     port_log("restarting for episode %d", cfg.episode);
 #ifdef _WIN32
@@ -946,14 +1037,73 @@ void pf_restart(void)
 
 void pf_exit(int code)
 {
+#ifdef PF_SDL_EMBED
+    if (embed_live) ed_play_stop(ED_STOP_EXIT);   /* the game wants to end: the play-test ends */
+#endif
     if (audio) SDL_CloseAudioDevice(audio);
     SDL_Quit();
     exit(code);
 }
 
+#ifdef PF_SDL_EMBED
+/* start a play-test in the editor's window and renderer */
+void pf_sdl_play_begin(SDL_Window *w, SDL_Renderer *r)
+{
+    uint64_t now;
+    if (ren != r) {
+        if (tex) SDL_DestroyTexture(tex);
+        if (bdtex) SDL_DestroyTexture(bdtex);
+        win = w; ren = r;
+        tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, MAX_W, 200);
+        bdtex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 208, 160);
+        if (tex) SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    }
+    if (!audio) {                        /* the first play-test: sound and a controller */
+        SDL_AudioSpec want, have;
+        if (!SDL_WasInit(SDL_INIT_AUDIO)) SDL_InitSubSystem(SDL_INIT_AUDIO);
+        SDL_memset(&want, 0, sizeof want);
+        want.freq = 44100; want.format = AUDIO_S16SYS; want.channels = 1; want.samples = 512; want.callback = audio_cb;
+        audio = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
+        if (audio) audio_rate = have.freq;
+    }
+    if (!pad) {
+        int i;
+        if (!SDL_WasInit(SDL_INIT_GAMECONTROLLER)) SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+        for (i = 0; i < SDL_NumJoysticks(); i++)
+            if (SDL_IsGameController(i)) { pad = SDL_GameControllerOpen(i); pad_detect_style(); break; }
+    }
+    {
+        SDL_DisplayMode dm;
+        if (SDL_GetCurrentDisplayMode(SDL_GetWindowDisplayIndex(win), &dm) == 0 && dm.refresh_rate > 0) display_hz = dm.refresh_rate;
+    }
+    perf_freq = SDL_GetPerformanceFrequency();
+    tick_len = (double)perf_freq * 8273.0 / 1193182.0;
+    now = SDL_GetPerformanceCounter();
+    next_tick_at = now;
+    last_present = 0;
+    SDL_RenderSetScale(ren, 1, 1);       /* (the editor's interface scales its own drawing) */
+    SDL_RenderSetViewport(ren, NULL);
+    SDL_RenderSetClipRect(ren, NULL);
+    update_view();
+    spk_div = 0;
+    if (audio) SDL_PauseAudioDevice(audio, 0);
+    embed_live = 1;
+}
+
+/* back to the editor */
+void pf_sdl_play_end(void)
+{
+    embed_live = 0;
+    spk_div = 0;
+    if (audio) SDL_PauseAudioDevice(audio, 1);
+}
+#endif
+
+#ifndef PF_SDL_EMBED
 int main(int argc, char **argv)
 {
     int scale = -1, fullscreen = -1, i, gargc = 1, ep = 0;
+    const char *pack_arg = NULL;
     char *gargv[4] = {"dn1", 0, 0, 0};
     SDL_AudioSpec want, have;
     for (i = 1; i < argc; i++) {
@@ -962,6 +1112,12 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[i], "--episode") && i + 1 < argc) ep = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--to-menu")) port_start_at_menu = 1;     /* after an episode switch */
+        else if (!strcmp(argv[i], "--pack") && i + 1 < argc) pack_arg = argv[++i];   /* a level or episode made in Shrapnel */
+        else if ((!strcmp(argv[i], "--level") || !strcmp(argv[i], "--level-index")) && i + 1 < argc) {
+            int raw = argv[i][7] == '-';
+            port_start_level = port_parse_level(argv[++i], raw);
+            if (port_start_level < 0) fprintf(stderr, "techbot: %s wants %s\n", argv[i - 1], raw ? "0..20" : "1..10");
+        }
         else if (gargc < 3) gargv[gargc++] = argv[i];      /* "asp", "g" switches */
     }
     cfg_defaults();
@@ -993,6 +1149,18 @@ int main(int argc, char **argv)
 #endif
     /* the episode: --episode, else the setting; if that EXE is missing, the
      * first one present (a folder may hold one, two or all three episodes) */
+    if (pack_arg) {                      /* a pack: its episode's art, and straight into its first level */
+        char err[1200];
+        if (!pack_open(pack_arg, err, sizeof err)) { fatal_message(err); return 1; }
+        if (!episode_available(pack.episode)) {
+            char msg[1400];
+            snprintf(msg, sizeof msg, "%s uses episode %d's art, but DN%d.EXE isn't in the game folder.", pack.name, pack.episode, pack.episode);
+            fatal_message(msg);
+            return 1;
+        }
+        ep = pack.episode;
+        if (!port_start_at_menu) port_start_level = 0;
+    }
     if (ep >= 1 && ep <= 3) cfg.episode = ep;
     if (!episode_available(cfg.episode))
         for (i = 1; i <= 3; i++) if (episode_available(i)) { cfg.episode = i; break; }
@@ -1136,7 +1304,9 @@ int main(int argc, char **argv)
     next_tick_at = SDL_GetPerformanceCounter();
     port_log("display refresh %d Hz", display_hz);
     port_log_step("running");
+    if (!port_start_at_menu) port_card_hold = 218;   /* 1.5 s each (not again after an episode switch) */
     game_main(gargc, gargv);
     pf_exit(0);
     return 0;
 }
+#endif /* !PF_SDL_EMBED */

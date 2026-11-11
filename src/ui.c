@@ -55,16 +55,18 @@ void draw_number(int32_t n, int x, int row)
 
 /* 108E:3D8C  dialog box at byte column x (x==2: on the current back page,
  * otherwise page 0), text row 'row', 'h' tile rows tall, 13 tiles wide */
-void ui_box(int x, int row, int h)
+/* (port) the same box at any pixel height: y = its top, h = from its top
+ * edge to its bottom edge's tile (ui_box: row * 16 and h * 16) */
+void ui_box_px(int x, int y, int h)
 {
     int si, di;
-    int top = (row << 4) * 0x28, hh = (h << 4) * 0x28;
+    int top = y * 0x28, hh = h * 0x28;
     ega_outw(0x3C4, 0x0F02);
     WRITE_MODE_LATCH();
     set_draw_page(x == 2 ? draw_page : 0);
     /* (port) the box's area - once the page it goes on is chosen, so it counts
      * as on screen exactly when it is */
-    dl_mark_dirty(x * 8, row * 16, 26 * 8, h * 16 + 16);
+    dl_mark_dirty(x * 8, y, 26 * 8, h + 16);
     for (si = 0; hh > si; si += 0x280) {
         blit_tile(0x32C0, (uint16_t)(top + si + x));
         blit_tile(0x32E0, (uint16_t)(top + si + x + 0x18));
@@ -82,6 +84,16 @@ void ui_box(int x, int row, int h)
     }
 }
 
+void ui_box(int x, int row, int h) { ui_box_px(x, row << 4, h << 4); }
+
+/* (port) one step of the spinning cursor lasts at least 3 timer ticks (about
+ * 21 ms, as with a 60 Hz display's wait): the original's 5 ms alone made it
+ * spin too fast to see wherever presenting doesn't wait for the display */
+void ui_cursor_hold(uint16_t from)
+{
+    SPIN_WHILE((uint16_t)(timer_ticks - from) < 3 && last_scancode == 0);
+}
+
 /* 108E:2870  animated cursor at (x, row) until a key / joystick button */
 void ui_wait_cursor(int x, int row)
 {
@@ -95,9 +107,11 @@ void ui_wait_cursor(int x, int row)
         int k;
         if (joy_present) { int b = pf_joystick_buttons(); b2 = b & 0x10; b1 = b & 0x20; }
         for (k = 0; k < 4; k++) {
+            uint16_t t = timer_ticks;
             draw_sprite(object_gfx + frames[k], x, row * 8);
             pf_present();
             pf_delay_ms(5);
+            ui_cursor_hold(t);
         }
     }
     draw_sprite(object_gfx + 0x37A0, x, row * 8);
@@ -126,6 +140,7 @@ void ui_clear_page0(void)
     int di, si;
     dl_reset();                          /* (port) leaving the play screen */
     port_picture = -1;                   /* (port) no full-screen picture any more */
+    port_text_tile = -1;                 /* ... nor a tiled text page */
     port_level_intro = 0;
     dl_wide_shown = 0;
     ega_outw(0x3C4, 0x0F02);

@@ -6,6 +6,7 @@
  */
 #include "dn1.h"
 #include <string.h>
+#include <stdio.h>
 
 void ui_box(int x, int row, int h);
 void ui_text(const char *s, int x, int row);
@@ -23,10 +24,12 @@ void dlg_keys_help(int x);
 void dlg_title_text(void);
 
 /* 108E:0286  fill page 0 with one tile (background for text pages) */
+int port_text_tile = -1;                 /* (port) see port.h */
 void ui_text_page(int tile)
 {
     int di, si;
     port_picture = -1;                   /* (port) */
+    port_text_tile = tile;
     ega_outw(0x3C4, 0x0F02);
     WRITE_MODE_LATCH();
     set_draw_page(0);
@@ -717,21 +720,28 @@ void dlg_episode_text(void)
 /* 108E:38BE */
 void dlg_main_menu_text(int x)
 {
+    if (pack.on) {                         /* (port) playing a pack: its name heads the menu */
+        char t[24];
+        snprintf(t, sizeof t, "%.22s", pack.name);
+        ui_text(t, x + 2 + (22 - (int)strlen(t)) / 2, 6);
+    } else
     ui_text(ds_str(0x41c1), x, 6);
     ui_text(ds_str(0x41d6), x, 7);
     ui_text(ds_str(0x41eb), x, 9);         /* S)tart a new game     */
     ui_text(ds_str(0x4200), x, 0xa);       /* R)estore an old game  */
     /* (port) E)pisode select replaces the original's T)itle screen (428Ch),
-     * which only showed the title picture; the entries below it move down */
+     * which only showed the title picture; the entries below it move down,
+     * and U)ser levels (made in Shrapnel) follows it */
     ui_text("   E)pisode select", x, 0xb);
-    ui_text(ds_str(0x4218), x, 0xc);       /* I)nstructions         */
-    ui_text(ds_str(0x4229), x, 0xd);       /* O)rdering information */
-    ui_text(ds_str(0x4242), x, 0xe);       /* G)ame setup           */
-    ui_text(ds_str(0x4251), x, 0xf);       /* H)igh scores          */
-    ui_text(ds_str(0x4261), x, 0x10);      /* P)reviews/Main demo   */
-    ui_text(ds_str(0x4279), x, 0x11);      /* V)iew user demo       */
-    ui_text(ds_str(0x429d), x, 0x12);      /* C)redits              */
-    ui_text(ds_str(0x42a9), x, 0x13);      /* Q)uit                 */
+    ui_text("   U)ser levels", x, 0xc);
+    ui_text(ds_str(0x4218), x, 0xd);       /* I)nstructions         */
+    ui_text(ds_str(0x4229), x, 0xe);       /* O)rdering information */
+    ui_text(ds_str(0x4242), x, 0xf);       /* G)ame setup           */
+    ui_text(ds_str(0x4251), x, 0x10);      /* H)igh scores          */
+    ui_text(ds_str(0x4261), x, 0x11);      /* P)reviews/Main demo   */
+    ui_text(ds_str(0x4279), x, 0x12);      /* V)iew user demo       */
+    ui_text(ds_str(0x429d), x, 0x13);      /* C)redits              */
+    ui_text(ds_str(0x42a9), x, 0x14);      /* Q)uit                 */
     return;
 }
 

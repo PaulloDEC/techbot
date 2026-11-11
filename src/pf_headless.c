@@ -199,7 +199,7 @@ static void dl_check(void)
 
 /* --wide W: Enhanced widescreen at picture width W; --wideshot F,F,...
  * writes the composed wide picture after those frames (PPM) */
-static long wshots[32]; static int n_wshots;
+static long wshots[400]; static int n_wshots;
 static const char *test_letters;     /* --test-letters: D/U/K/E collected (the HUD box) */
 static void apply_test_letters(void)
 {
@@ -243,8 +243,55 @@ static void wide_shot(void)
     fclose(f);
 }
 
+/* --state-test F,K: snapshot at frame F, play K frames noting a fingerprint
+ * of the whole state after each, go back to the snapshot, play the same K
+ * frames again: every fingerprint must match.
+ * --reset-test N,I: at frame N go back to the start-up snapshot and start
+ * afresh at level table index I; the --dump from then on must match a fresh
+ * run started with --level-index I. */
+static long st_at = -1, st_len, rt_at = -1;
+static int rt_to;
+static PortState *boot_state;
+static void take_boot_state(void) { boot_state = port_state_new(); if (boot_state) port_state_save(boot_state); }
+static void state_tests(void)
+{
+    static PortState *snap, *tmp;
+    static uint64_t *h1;
+    static int phase;
+    static long base, bad, first_bad = -1;
+    if (rt_at >= 0 && frame_no == rt_at) {
+        rt_at = -1;
+        port_state_load(boot_state);
+        port_start_level = rt_to;
+        printf("reset-test: frame %ld, back to the start-up state, starting level index %d\n", frame_no, rt_to);
+        frame_no++;
+        port_restart();
+    }
+    if (st_at < 0) return;
+    if (!tmp) { tmp = port_state_new(); h1 = (uint64_t *)calloc((size_t)st_len + 1, sizeof *h1); }
+    if (phase == 0 && frame_no == st_at) {
+        snap = port_state_new(); port_state_save(snap); phase = 1; base = frame_no;
+        return;
+    }
+    if (phase == 0) return;
+    port_state_save(tmp);
+    if (phase == 1) {
+        h1[frame_no - base - 1] = port_state_hash(tmp);
+        if (frame_no - base == st_len) { port_state_load(snap); phase = 2; base = frame_no; }
+    } else {
+        if (h1[frame_no - base - 1] != port_state_hash(tmp)) { bad++; if (first_bad < 0) first_bad = frame_no - base; }
+        if (frame_no - base == st_len) {
+            printf("state-test: %ld frames from frame %ld replayed after restoring, %ld differ", st_len, st_at, bad);
+            if (bad) printf(" (first at +%ld)", first_bad);
+            printf("\n");
+            pf_exit(bad ? 2 : 0);
+        }
+    }
+}
+
 void pf_frame_hook(void)
 {
+    state_tests();
     if (wide_w) wide_shot();
     if (dl_test) dl_check();
     if (dump) {
@@ -315,6 +362,13 @@ static void export_sounds(const char *dir)
     }
 }
 
+/* (the headless build stays in one episode: a pack opens here, whatever its art) */
+void pf_restart_pack(const char *path)
+{
+    char err[1200];
+    if (!pack_open(path, err, sizeof err)) fprintf(stderr, "%s\n", err);
+}
+
 int main(int argc, char **argv)
 {
     const char *exe = "DN1.EXE";
@@ -323,6 +377,18 @@ int main(int argc, char **argv)
         if (!strcmp(argv[i], "--dir") && i + 1 < argc) gamedir = argv[++i];
         else if (!strcmp(argv[i], "--exe") && i + 1 < argc) exe = argv[++i];
         else if (!strcmp(argv[i], "--menu") && i + 1 < argc) forced_menu_choice = atoi(argv[++i]);
+        else if ((!strcmp(argv[i], "--level") || !strcmp(argv[i], "--level-index")) && i + 1 < argc) {
+            int raw = argv[i][7] == '-';
+            port_start_level = port_parse_level(argv[++i], raw);
+            if (port_start_level < 0) { fprintf(stderr, "%s wants %s\n", argv[i - 1], raw ? "0..20" : "1..10"); return 1; }
+        }
+        else if (!strcmp(argv[i], "--state-test") && i + 1 < argc) {
+            if (sscanf(argv[++i], "%ld,%ld", &st_at, &st_len) != 2 || st_at < 0 || st_len < 1) { fprintf(stderr, "--state-test F,K\n"); return 1; }
+        }
+        else if (!strcmp(argv[i], "--reset-test") && i + 1 < argc) {
+            if (sscanf(argv[++i], "%ld,%d", &rt_at, &rt_to) != 2 || rt_to < 0 || rt_to > 20) { fprintf(stderr, "--reset-test N,I\n"); return 1; }
+            port_boot_hook = take_boot_state;
+        }
         else if (!strcmp(argv[i], "--frames") && i + 1 < argc) max_frames = atol(argv[++i]);
         else if (!strcmp(argv[i], "--dump") && i + 1 < argc) dump = fopen(argv[++i], "wb");
         else if (!strcmp(argv[i], "--shots") && i + 2 < argc) { shot_prefix = argv[++i]; shot_every = atoi(argv[++i]); }
@@ -350,7 +416,7 @@ int main(int argc, char **argv)
         }
         else if (!strcmp(argv[i], "--wideshot") && i + 1 < argc) {
             char *p = argv[++i];
-            while (*p && n_wshots < 32) { wshots[n_wshots++] = strtol(p, &p, 10); if (*p == ',') p++; }
+            while (*p && n_wshots < 400) { wshots[n_wshots++] = strtol(p, &p, 10); if (*p == ',') p++; }
         }
         else if (!strcmp(argv[i], "--export-sounds") && i + 1 < argc) export_dir = argv[++i];
         else if (!strcmp(argv[i], "--dl-test")) { dl_test = 1; cfg.mode = MODE_ENHANCED; cfg.smooth = 1; }
@@ -364,6 +430,15 @@ int main(int argc, char **argv)
                 if (*p == ',') p++;
             }
         }
+        else if (!strcmp(argv[i], "--pack") && i + 1 < argc) {   /* a level or episode made in Shrapnel */
+            char err[1200];
+            if (!pack_open(argv[++i], err, sizeof err)) { fprintf(stderr, "%s\n", err); return 1; }
+            static char ename[16];
+            snprintf(ename, sizeof ename, "DN%d.EXE", pack.episode);
+            exe = ename;
+            if (port_start_level < 0) port_start_level = 0;
+        }
+        else if (!strcmp(argv[i], "--auto-enter")) { shot_prefix = "auto"; dlg_auto = 1; }   /* answer every wait (and shoot it) */
         else if (!strcmp(argv[i], "--snap") && i + 1 < argc) {
             char *p = argv[++i];
             while (*p && n_snaps < 64) { snaps[n_snaps++] = strtol(p, &p, 10); if (*p == ',') p++; }

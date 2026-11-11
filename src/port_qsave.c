@@ -60,7 +60,7 @@ static const char *qsv_name(void)
 {
     static char n[16];
     snprintf(n, sizeof n, "TECHBOT%d.QSV", episode);
-    return n;
+    return pack_file_name(n);            /* a pack's is its own */
 }
 /* quicksaves from before the Techbot name (DNnPORT.QSV) still load */
 static FILE *qsv_open_read(void)

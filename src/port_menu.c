@@ -53,9 +53,11 @@ static int select_loop(const MenuItem *it, int n, int *sel, long *idle, long lim
         cell_save(col, y);
         while (last_scancode == 0) {
             for (k = 0; k < 4 && last_scancode == 0; k++) {
+                uint16_t t = timer_ticks;
                 draw_sprite(object_gfx + cursor_frames[k], col, y);
                 pf_present();
                 pf_delay_ms(5);
+                ui_cursor_hold(t);
             }
             if (idle && (*idle += 20) > limit) { cell_restore(); ui_context = prev; return 0; }
         }

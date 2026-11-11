@@ -12,6 +12,7 @@
 
 /* ui.c / ui_dialogs.c */
 void ui_box(int x, int row, int h);
+void ui_box_px(int x, int y, int h);
 void ui_text(const char *s, int x, int row);
 void ui_wait_cursor(int x, int row);
 void ui_clear_page0(void);
@@ -60,6 +61,7 @@ static void show_picture(int idx)
     for (p = 0; p < 4; p++)
         for (i = 0; i < 0x1F40; i++) ega_planes[p][i] = img ? img[p * 0x1F40 + i] : 0;
     port_picture = idx;                  /* (port) replacement art can stand in for it */
+    port_text_tile = -1;
     memset(ega_written, 0, sizeof ega_written);   /* nothing drawn over it yet */
     set_display_page(0);
     pf_present();
@@ -127,9 +129,11 @@ void ui_pause(int x)
 void show_level_note(void)
 {
     int si = level_index * 4, k;
+    const char (*own)[PACK_NOTE_W + 1] = pack_note(level_index);   /* (port) a pack's own text */
     ui_box(2, 1, 3);
     for (k = 0; k < 4; k++) {
-        const char *s = ds_farstr((uint16_t)(0xBA1 + (si + k) * 4));
+        /* (a pack's entry without text of its own: the stock one, while there is one) */
+        const char *s = own ? own[k] : pack.on && level_index >= 20 ? NULL : ds_farstr((uint16_t)(0xBA1 + (si + k) * 4));
         if (s) ui_text(s, 3, 3 + k);
     }
     ui_text(ds_str(0x08AE), 3, 8);
@@ -149,7 +153,7 @@ char    hiname[10][11];       /* 5008 */
 
 void load_high_scores(void)
 {
-    FILE *f = fopen(game_path(ds_str(0x38D2)), "r");
+    FILE *f = fopen(game_path(pack_file_name(ds_str(0x38D2))), "r");
     int i;
     if (!f) {
         static const int32_t def[5] = {40000, 30000, 20000, 10000, 500};
@@ -167,7 +171,8 @@ void load_high_scores(void)
 }
 void save_high_scores(void)
 {
-    FILE *f = fopen(game_path(ds_str(0x3757)), "w");
+    if (port_no_disk) return;            /* (port) a play-test in Shrapnel */
+    FILE *f = fopen(game_path(pack_file_name(ds_str(0x3757))), "w");
     int i;
     if (!f) return;
     for (i = 0; i < 10; i++) {
@@ -215,16 +220,61 @@ void ui_high_scores(int x)
     }
 }
 
-/* 0097:0874  read a name (up to 10 chars) at (x,row) */
+/* 0097:0874  read a name (up to 10 chars) at (x,row)
+ * (port) plus the way a console does it, for a controller (and the arrow
+ * keys): up and down step through the letters and digits for in the next place, right keeps
+ * it and moves on (with nothing picked: a space), left takes the last one
+ * back to change it; Enter / confirm keeps the one picked and finishes.
+ * Typing works as in the original. */
+static const uint8_t name_keys[26] = { 0x1E, 0x30, 0x2E, 0x20, 0x12, 0x21, 0x22, 0x23, 0x17, 0x24, 0x25, 0x26, 0x32,
+                                       0x31, 0x18, 0x19, 0x10, 0x13, 0x1F, 0x14, 0x16, 0x2F, 0x11, 0x2D, 0x15, 0x2C };
+static char name_char(int i)            /* A..Z (as typing gives them), then 0..9 */
+{
+    return i < 26 ? (char)ds_u8((uint16_t)(name_keys[i] * 7 + 0xA1)) : (char)('0' + i - 26);
+}
+static void name_show(char ch, int col, int row)   /* one place, cleared first */
+{
+    char s[2];
+    draw_sprite(object_gfx + 0x37A0, col, row * 8);   /* (the cursor's resting frame: the box's own background) */
+    s[0] = ch; s[1] = 0;
+    if (ch) ui_text(s, col, row);
+}
 static void read_name(char *dst, int x, int row)
 {
-    int si = 0;
+    int si = 0, pick = -1;               /* (port) pick: the letter being chosen, -1 none */
     last_scancode = 0;
     for (;;) {
         uint8_t c;
-        ui_wait_cursor(x + si + 1, row);
+        ui_wait_cursor(x + si + 1 + (pick >= 0), row);
         c = last_scancode;
-        if (c == 0x1C) { dst[si] = 0; return; }
+        if (c & 0x80) continue;          /* a key let go */
+        if (c == 0x48 || c == 0x50) {    /* (port) up / down: the next or previous letter */
+            if (si >= 10) continue;
+            if (pick < 0) {
+                int i;
+                pick = 0;
+                for (i = 0; si > 0 && i < 36; i++) if (name_char(i) == dst[si - 1]) pick = i;   /* from the last one */
+            } else pick = (pick + (c == 0x48 ? 1 : 35)) % 36;
+            name_show(name_char(pick), x + si + 1, row);
+            continue;
+        }
+        if (c == 0x4D) {                 /* (port) right: keep it (or a space) and move on */
+            if (si >= 10) continue;
+            dst[si++] = pick >= 0 ? name_char(pick) : ' ';
+            pick = -1;
+            continue;
+        }
+        if (c == 0x4B) {                 /* (port) left: back to the last one, to change it */
+            if (pick >= 0) { name_show(0, x + si + 1, row); pick = -1; continue; }
+            if (si == 0) continue;
+            si--;
+            for (pick = 35; pick > 0 && name_char(pick) != dst[si]; pick--) ;
+            if (name_char(pick) != dst[si]) pick = 0;
+            name_show(name_char(pick), x + si + 1, row);
+            continue;
+        }
+        if (pick >= 0 && c != 0x1C) { name_show(0, x + si + 1, row); pick = -1; }   /* (port) typing instead */
+        if (c == 0x1C) { if (pick >= 0) dst[si++] = name_char(pick); dst[si] = 0; return; }
         if (c == 0x0E) { if (si > 0) si--; continue; }
         if (si >= 10) continue;
         if ((c >= 0x10 && c <= 0x19) || (c >= 0x2C && c <= 0x32) || (c >= 0x1E && c <= 0x26)) {
@@ -295,7 +345,7 @@ int main_menu(int x)
         }
     menu:
         WRITE_MODE_LATCH();
-        ui_box(x, 2, 8);
+        ui_box_px(x, 32, 136);           /* (port) one text row (8 pixels) taller: U)ser levels */
         WRITE_MODE_NORMAL();
         dlg_main_menu_text(x);
         ui_fade_in(0x0F);
@@ -305,12 +355,12 @@ int main_menu(int x)
             if (cfg.cursor_menus) {
                 /* (port) cursor menu over the original's eleven options */
                 static int sel;
-                static const uint8_t keys[11] = { 0x1F, 0x13, 0x12, 0x17, 0x18, 0x22,
+                static const uint8_t keys[12] = { 0x1F, 0x13, 0x12, 0x16, 0x17, 0x18, 0x22,
                                                   0x23, 0x19, 0x2F, 0x2E, 0x10 };
-                MenuItem it[11];
+                MenuItem it[12];
                 int i;
-                for (i = 0; i < 11; i++) { it[i].col = (uint8_t)(x + 2); it[i].row = (uint8_t)(9 + i); it[i].key = keys[i]; }
-                if (!ui_menu_wait_idle(it, 11, &sel, &idle, 0xBBAEE0L)) { last_scancode = 0; ui_fade_out(0x14); return 5; }
+                for (i = 0; i < 12; i++) { it[i].col = (uint8_t)(x + 2); it[i].row = (uint8_t)(9 + i); it[i].key = keys[i]; }
+                if (!ui_menu_wait_idle(it, 12, &sel, &idle, 0xBBAEE0L)) { last_scancode = 0; ui_fade_out(0x14); return 5; }
             } else
             while (last_scancode == 0) {
                 pf_service();
@@ -340,6 +390,8 @@ int main_menu(int x)
                 if (dlg_confirm_quit(7)) return 0;
             } else if (last_scancode == 0x22) {
                 dlg_game_setup(x);
+            } else if (last_scancode == 0x16) {    /* (port) U: user levels, made in Shrapnel */
+                if (ui_pick_pack(x)) return 1;
             } else if (last_scancode == 0x12) {    /* (port) E: episode select */
                 int e = ui_episode_select(x);
                 if (e && e != episode) port_switch_episode(e);
@@ -438,7 +490,87 @@ done:
  * ---------------------------------------------------------------- */
 static void wait_ticks(int n) { timer_ticks = 0; SPIN_WHILE(timer_ticks < (uint16_t)n); }   /* E92E */
 static void wait_release(void) { if (!joystick_mode) SPIN_WHILE(!(last_scancode & 0x80)); }
+int pack_finished;                       /* (port) see port.h */
+static void stock_ending(void);
+int  exe_text_borrow(const char *path);   /* exe.c */
+void exe_text_return(void);
+void reload_end_screen(void);            /* files.c */
+const char *game_path(const char *name);
+
+/* (port) a pack's own words for its ending, over Duke's picture, a box at
+ * a time like the game's own ending (five lines of at most 23 characters) */
+#define END_LINES 5
+#define END_W 23
+static void custom_ending(void)
+{
+    const char *t = pack.ending_text;
+    add_score(100000L);
+    ui_fade_out(0x14);
+    ui_clear_page0();
+    ui_show_duke();
+    ui_fade_in(0x14);
+    while (*t) {
+        char lines[END_LINES][END_W + 1];
+        int n = 0, k;
+        memset(lines, 0, sizeof lines);
+        while (*t && n < END_LINES) {
+            int len = 0, cut = -1, i;
+            while (t[len] && t[len] != '\n' && len < END_W) { if (t[len] == ' ') cut = len; len++; }
+            if (t[len] && t[len] != '\n' && t[len] != ' ' && cut > 0) len = cut;   /* break at a space */
+            for (i = 0; i < len; i++) lines[n][i] = t[i];
+            n++;
+            t += len;
+            while (*t == ' ') t++;
+            if (*t == '\n') t++;
+        }
+        wait_release();
+        ui_box(7, 8, 3);
+        for (k = 0; k < n; k++) ui_text(lines[k], 8, 17 + k);
+        ui_wait_cursor(0x1F, 0x16);
+        timer_ticks = 0;
+    }
+    ui_fade_out(0x14);
+}
+
+/* (port) the end of a pack: the ending PACK.INI names - a stock one (the
+ * episode's own, or another episode's when its EXE is in the folder) or the
+ * pack's own words */
+void pack_ending(void)
+{
+    int which = pack.ending;
+    if (which == 0) {                    /* its own words; with none, no words at the exit */
+        if (pack.ending_text[0]) custom_ending();
+        else if (!pack_finished) stock_ending();   /* (Dr. Proton beaten: the episode's own) */
+        return;
+    }
+    if (which < 1 || which > 3) which = episode;
+    if (which != episode) {
+        char name[16];
+        snprintf(name, sizeof name, "DN%d.EXE", which);
+        if (exe_text_borrow(game_path(name))) {
+            reload_end_screen();
+            stock_ending();
+            exe_text_return();
+            reload_end_screen();
+            return;
+        }
+    }
+    stock_ending();
+}
+
 void ending_sequence(void)
+{
+    /* (port) the ending's pictures are full-screen pictures, not play: so
+     * widescreen replacement art (END.DN1.png and the rest) stands in for
+     * them as everywhere else, and its sprites aren't clipped as actors */
+    int keep = port_in_play;
+    port_in_play = 0;
+    if (pack.on) pack_ending();
+    else stock_ending();
+    port_in_play = keep;
+}
+
+static void stock_ending(void)
 {
     int si, di = 0;
     add_score(100000L);

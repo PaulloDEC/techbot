@@ -153,5 +153,7 @@ int port_picture = -1;           /* full-screen picture being shown (0..4), -1 n
  * shows the pair of the level before it. */
 const char *art_backdrop_name(int which)
 {
+    if (port_drop[which].name[0]) return port_drop[which].name;
+    if (pack.on) return pack_backdrop(level_index, which, NULL, NULL);
     return ds_farstr((uint16_t)(0x0B47 + ((level_index & ~1) + which) * 4));
 }

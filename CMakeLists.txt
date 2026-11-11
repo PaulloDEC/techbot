@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(techbot C)   # Techbot - An Enhanced PC Port of Duke Nukem
+project(techbot C CXX)   # Techbot - An Enhanced PC Port of Duke Nukem (+ Shrapnel, its level editor)
 
 set(CMAKE_C_STANDARD 99)
 if(MSVC)
@@ -15,7 +15,22 @@ set(DN1_CORE
     src/frontend.c src/main.c src/port_cfg.c src/port_menu.c
     src/port_options.c src/port_qsave.c src/port_labels.c
     src/port_render.c src/port_sound.c
-    src/episode_map.c src/port_art.c src/port_log.c src/port_hud.c)
+    src/episode_map.c src/port_art.c src/port_log.c src/port_hud.c
+    src/port_state.c src/port_editor.c src/port_reach.c src/port_pack.c src/port_dir.c
+    shrapnel/third_party/miniz/miniz.c)
+
+# The game itself, built once and shared: Techbot, the headless test build
+# and the Shrapnel level editor each add a platform layer (the pf_* functions
+# and game_path, declared in src/dn1.h and src/port.h) and link this.
+add_library(techbot_core STATIC ${DN1_CORE})
+target_include_directories(techbot_core PUBLIC src shrapnel/third_party/miniz)
+if(UNIX)
+    target_link_libraries(techbot_core PUBLIC m)
+endif()
+if(MSVC)
+    target_compile_definitions(techbot_core PUBLIC _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(techbot_core PRIVATE $<$<CONFIG:Release>:/Zi>)
+endif()
 
 # Playable build (SDL2): techbot(.exe).  (Not "dn1": on Windows that would be
 # the same file name as the original DN1.EXE, which the port reads at
@@ -30,10 +45,10 @@ if(SDL2_FOUND)
         set(TECHBOT_RES resources/techbot.rc)   # icon + version details
     endif()
     if(TECHBOT_CONSOLE)
-        add_executable(techbot ${DN1_CORE} src/pf_sdl.c ${TECHBOT_RES})
+        add_executable(techbot src/pf_sdl.c ${TECHBOT_RES})
         target_compile_definitions(techbot PRIVATE TECHBOT_CONSOLE)
     else()
-        add_executable(techbot WIN32 ${DN1_CORE} src/pf_sdl.c ${TECHBOT_RES})
+        add_executable(techbot WIN32 src/pf_sdl.c ${TECHBOT_RES})
         # say it to the linker as well (WIN32 alone has been seen not to stick)
         if(MSVC)
             target_link_options(techbot PRIVATE /SUBSYSTEM:WINDOWS)
@@ -44,10 +59,7 @@ if(SDL2_FOUND)
     if(TARGET SDL2::SDL2main)
         target_link_libraries(techbot PRIVATE SDL2::SDL2main)
     endif()
-    target_link_libraries(techbot PRIVATE SDL2::SDL2)
-    if(UNIX)
-        target_link_libraries(techbot PRIVATE m)
-    endif()
+    target_link_libraries(techbot PRIVATE techbot_core SDL2::SDL2)
     if(MSVC)
         target_compile_definitions(techbot PRIVATE _CRT_SECURE_NO_WARNINGS)
         # debug information for Release too (techbot.pdb next to techbot.exe):
@@ -62,6 +74,38 @@ if(SDL2_FOUND)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                     $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:techbot>)
     endif()
+
+    # Shrapnel, the level editor (C++ / Dear ImGui), linking the same core
+    set(IMGUI_DIR shrapnel/third_party/imgui)
+    add_executable(shrapnel WIN32
+        shrapnel/src/main.cpp shrapnel/src/episode.cpp shrapnel/src/selftest.cpp shrapnel/src/catalog.cpp shrapnel/src/picture.cpp shrapnel/src/theme.cpp
+        shrapnel/src/tools.cpp shrapnel/src/doc.cpp shrapnel/src/filedlg.cpp shrapnel/src/project.cpp shrapnel/src/checks.cpp
+        shrapnel/src/pf_shrapnel.c shrapnel/src/pf_sdl_embed.c
+        ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
+        ${IMGUI_DIR}/imgui_widgets.cpp ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp)
+    if(WIN32)
+        target_sources(shrapnel PRIVATE shrapnel/resources/shrapnel.rc)   # icon + version details
+    endif()
+    target_include_directories(shrapnel PRIVATE ${IMGUI_DIR} shrapnel/third_party/miniz)
+    target_compile_features(shrapnel PRIVATE cxx_std_17)   # std::filesystem (project files)
+    if(TARGET SDL2::SDL2main)
+        target_link_libraries(shrapnel PRIVATE SDL2::SDL2main)
+    endif()
+    target_link_libraries(shrapnel PRIVATE techbot_core SDL2::SDL2)
+    if(WIN32)
+        target_link_libraries(shrapnel PRIVATE comdlg32 shell32 ole32)   # Open / Save As / folder dialogs
+    endif()
+    if(MSVC)
+        target_link_options(shrapnel PRIVATE /SUBSYSTEM:WINDOWS)
+    elseif(WIN32)
+        target_link_options(shrapnel PRIVATE -Wl,--subsystem,windows)
+    endif()
+    if(WIN32)
+        add_custom_command(TARGET shrapnel POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:shrapnel>)
+    endif()
 else()
     message(WARNING "SDL2 not found: only the headless test build is configured. "
                     "Pass -DCMAKE_PREFIX_PATH=<SDL2 folder> (see BUILDING.md).")
@@ -70,6 +114,6 @@ endif()
 # Deterministic headless build used by the verification tools (POSIX only:
 # uses dirent for case-insensitive file lookup).
 if(NOT WIN32)
-    add_executable(dn1_headless ${DN1_CORE} src/pf_headless.c)
-    target_link_libraries(dn1_headless PRIVATE m)
+    add_executable(dn1_headless src/pf_headless.c)
+    target_link_libraries(dn1_headless PRIVATE techbot_core)
 endif()

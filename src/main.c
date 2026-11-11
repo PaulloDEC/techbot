@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <setjmp.h>
 
 void init_globals_from_exe(void);
 void load_graphics(void);
@@ -58,12 +59,34 @@ void shutdown_game(void)
 /* (port) main menu > Episode select: save what quitting saves, then start
  * the other episode's EXE (the platform layer restarts at its main menu) */
 int port_start_at_menu;
+
+/* (port) --level N: start straight into that level (index into the EXE's
+ * level table: even = level, odd = hallway), no menu or intro, once */
+int port_start_level = -1;
+
+/* "--level N" takes the level number as players know it (1..10); "--level-index I"
+ * the raw table index (0..20, so hallways and the demo map too) */
+int port_parse_level(const char *a, int raw)
+{
+    char *end;
+    long n = strtol(a, &end, 10);
+    if (*end || end == a) return -1;
+    if (raw) return (n >= 0 && n <= 20) ? (int)n : -1;
+    return (n >= 1 && n <= 10) ? (int)(n - 1) * 2 : -1;
+}
 void port_switch_episode(int e)
 {
     save_on_exit();
     cfg.episode = e;
     cfg_save(game_path(PORT_CFG_FILE));
     pf_restart();
+}
+
+/* (port) a pack of another episode's art: saves, then restarts playing it */
+void port_switch_pack(const char *path)
+{
+    save_on_exit();
+    pf_restart_pack(path);
 }
 
 /* 0097:FD15  title screens + main menu until a game or demo is chosen */
@@ -73,9 +96,35 @@ static void title_menu(void)
         int choice;
         ui_clear_page0();
         if (forced_menu_choice == -2) pf_exit(0);          /* test harness: one run only */
+        if (port_start_level >= 0) {                       /* (port) --level: a new game, no intro */
+            set_all_hints(0);
+            demo_play = 0;
+            demo_available = 1;
+            demo_pos = 0;
+            demo_record = 0;                               /* keep the player's USERDEMO */
+            restoring_game = 0;
+            port_resume_qs = 0;
+            demo_missing = 0;
+            ui_fade_grey(0x14);
+            if (hints_on == 1) set_all_hints(1);
+            play_sound(0x1A);
+            return;
+        }
         choice = (forced_menu_choice >= 0) ? forced_menu_choice : main_menu(7);
         if (forced_menu_choice >= 0) forced_menu_choice = -2;   /* only once */
         set_all_hints(0);
+        if (choice == 1 && pack.on) {                          /* (port) a pack: no story intro */
+            demo_play = 0;
+            demo_available = 1;
+            demo_pos = 0;
+            demo_record = 1;
+            restoring_game = 0;
+            demo_missing = 0;
+            ui_fade_grey(0x14);
+            if (hints_on == 1) set_all_hints(1);
+            play_sound(0x1A);
+            return;
+        }
         if (choice == 1) {                                     /* new game */
             demo_play = 0;
             demo_available = 1;
@@ -169,6 +218,14 @@ static void init_game(void)
     load_speed(ds_str(0x0B00));
 }
 
+/* (port) the editor's start-up: the same as the game's */
+void port_init_game(void) { init_game(); }
+
+/* (port) see port.h */
+void (*port_boot_hook)(void);
+static jmp_buf restart_point;
+void port_restart(void) { port_in_play = 0; longjmp(restart_point, 1); }
+
 /* 0097:FF16 */
 void game_main(int argc, char **argv)
 {
@@ -180,6 +237,8 @@ void game_main(int argc, char **argv)
         if (argc > 2 && argv[2][0] == 'g') cmd_chain_kbd = 1;
     }
     init_game();
+    if (port_boot_hook) port_boot_hook();
+    setjmp(restart_point);               /* (port) port_restart() comes back here */
     for (;;) {
         title_menu();
         start_game();

@@ -65,6 +65,8 @@ static void bonus_pair(uint16_t a, uint16_t b, int si)
     spawn_score(b, player_x + scroll_x + 6, y);
 }
 
+void (*port_frame_input)(void);         /* (port) see port.h */
+
 void play_level_loop(void)
 {
     int demo_done = 0;
@@ -126,6 +128,7 @@ resume:
 
         /* ------------------------------------------------ simulate + draw */
         /* (port) dl_group tags what each routine draws, for smooth motion */
+        if (port_frame_input) port_frame_input();   /* (port) Shrapnel: replays, recording */
         dl_group = 0x80; player_update();
         dl_group = 0x81; update_scores();
         dl_group = 0x82; update_debris();
@@ -261,6 +264,11 @@ resume:
             if (demo_record == 1) { demo_record = 0; demo_len_user = demo_pos; }
             if (demo_record == 2) { demo_record = 0; demo_len_my = demo_pos; return; }
             if (demo_play) demo_done = 1;
+            if (pack_is_last(level_index)) {     /* (port) a pack's last level: the episode is over */
+                pack_finished = 1;
+                game_over = 1;
+                goto frame_end;
+            }
             level_index++;
             load_level(ds_farstr((uint16_t)(0x3A4 + level_index * 4)));
             if (level_index % 2 != 0) {

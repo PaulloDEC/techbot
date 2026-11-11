@@ -158,6 +158,7 @@ void cfg_load(const char *path_in)
 
 void cfg_save(const char *path)
 {
+    if (port_no_disk) return;            /* (port) a play-test in Shrapnel */
     int i;
     FILE *f = fopen(path, "w");
     if (!f) return;

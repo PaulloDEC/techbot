@@ -18,6 +18,7 @@ void inventory_draw_card(void);           /* 108E:1F9C */
 /* shared logic for the single-instance boxed items (boots, claws, hand, card) */
 static int boxed_item(int16_t *x, int16_t *y, int16_t *opened, uint16_t item_gfx)
 {
+    if (port_boxes_open) *opened = 1;    /* (port) Shrapnel self-test: boxes taken as shot open */
     if (offscreen(*x, *y)) return 0;
     SETTLE(*x, *y);
     if (player_touches(*x, *y) && *opened) return 1;      /* collected */

@@ -14,6 +14,7 @@
 void ui_box(int x, int row, int h);
 void ui_text(const char *s, int x, int row);
 void save_keys(const char *name);
+void ui_wait_cursor(int x, int row);
 
 #define KEY_CANCEL 0x01
 enum { K0 = 0xE0 };          /* item keys: not real scancodes, only returned on confirm */
@@ -247,6 +248,75 @@ int ui_episode_select(int x)
         k = choose(it, n, &sel, &dir);
         if (k < 0) { last_scancode = 0; return 0; }
         if (dir == 0) { last_scancode = 0; return ep_of[k]; }
+    }
+}
+
+/* ---------------------------------------------------------------- custom levels
+ * The levels and episodes made in Shrapnel in the game folder's LEVELS
+ * folder, ten to a page (left / right turn the pages).  Picking one opens it
+ * (or restarts in its episode, if its art is another episode's): 1 when it is
+ * open and ready to play. */
+/* until no key or controller button is down: the press that brought a
+ * message up (or its key repeat, or its release) mustn't also close it */
+static int any_held(void)
+{
+    int k;
+    for (k = 1; k < 128; k++) if (port_key_held[k]) return 1;
+    return joy_present && (pf_joystick_buttons() & 0x30) != 0x30;
+}
+static void message(int x, const char *a, const char *b, const char *c)
+{
+    frame_at(x, "USER LEVELS", 6);
+    centre(x, 7, "-----------");
+    if (a) centre(x, 10, a);
+    if (b) centre(x, 11, b);
+    if (c) centre(x, 12, c);
+    SPIN_WHILE(any_held());
+    ui_wait_cursor(x + 0x18, 0x12);
+    last_scancode = 0;
+}
+int ui_pick_pack(int x)
+{
+    static PackInfo list[200];
+    int n = pack_list(list, 200), page = 0, sel = 0, dir, k;
+    if (n == 0) {
+        message(x, "None yet. Put levels", "made in Shrapnel in the", "LEVELS folder.");
+        return 0;
+    }
+    for (;;) {
+        MenuItem it[10];
+        int first = page * 10, m = n - first < 10 ? n - first : 10, i;
+        char line[40];
+        frame_at(x, "USER LEVELS", 6);
+        centre(x, 7, "-----------");
+        for (i = 0; i < m; i++) {
+            const PackInfo *p = &list[first + i];
+            if (p->levels > 1) snprintf(line, sizeof line, "%.16s (%d)", p->name, p->levels);
+            else snprintf(line, sizeof line, "%.21s", p->name);
+            ui_text(line, x + 3, 8 + i);
+            it[i].col = (uint8_t)(x + 2); it[i].row = (uint8_t)(8 + i); it[i].key = (uint8_t)(K0 + i);
+        }
+        if (n > 10) {
+            snprintf(line, sizeof line, "< page %d of %d >", page + 1, (n + 9) / 10);
+            centre(x, 18, line);
+        }
+        if (sel >= m) sel = m - 1;
+        k = choose(it, m, &sel, &dir);
+        if (k < 0) { last_scancode = 0; return 0; }
+        if (dir) { page = (page + dir + (n + 9) / 10) % ((n + 9) / 10); continue; }
+        {
+            const PackInfo *p = &list[first + k];
+            char err[1200];
+            if (!episode_available(p->episode)) {
+                snprintf(line, sizeof line, "DN%d.EXE", p->episode);
+                message(x, "It needs episode", p->episode == 2 ? "two's art:" : p->episode == 3 ? "three's art:" : "one's art:", line);
+                continue;
+            }
+            if (p->episode != episode) { port_switch_pack(p->path); return 0; }
+            if (!pack_open(p->path, err, sizeof err)) { message(x, "That file can't", "be played:", "is it damaged?"); continue; }
+            last_scancode = 0;
+            return 1;
+        }
     }
 }
 

@@ -69,7 +69,7 @@ void spawn_level_actors(int rows)
 #define BELOW()  (MAP16(o) = MAP16(o + 0x100))
 #define OBJ6(a, n, S)       do { a[n].s = (S); a[n].x = X; a[n].y = Y; } while (0)
 #define OBJ8(a, n, S, T)    do { a[n].s = (S); a[n].x = X; a[n].y = Y; a[n].t = (T); } while (0)
-            if (id < 0x3000 || id - 0x3000 > 0x59) continue;
+            if (id < 0x3000 || id - 0x3000 > 0x5D) continue;   /* (port: 305Ah..305Dh are Techbot's) */
             switch (id - 0x3000) {
             case 0x00: OBJ6(greyboxes, n_greybox, 1); register_actor(act_greyboxes); LEFT(); n_greybox++; break;
             case 0x01:
@@ -222,6 +222,12 @@ void spawn_level_actors(int rows)
                 OBJ8(keydoors, n_keydoors, (id - 0x304B) * 0xA0, 0); n_keydoors++;
                 MAP16(o) = 0x1820; register_actor(act_keydoors);
                 break;
+            /* (port) Techbot's loose items: as 3006h / 3008h / 3020h / 3033h, but
+             * not in a box (they start shot open).  Never in a stock map. */
+            case 0x5A: boots_x = X; boots_y = Y; boots_state = 1; register_actor(act_boots); LEFT(); break;
+            case 0x5B: claws_x = X; claws_y = Y; claws_state = 1; register_actor(act_claws); LEFT(); break;
+            case 0x5C: robohand_x = X; robohand_y = Y; robohand_state = 1; register_actor(act_robohand); LEFT(); break;
+            case 0x5D: have_card = 0; card_present = 1; card_x = X; card_y = Y; card_state = 1; register_actor(act_card); LEFT(); break;
             case 0x57: OBJ6(static_bombs, n_static_bombs, 1); n_static_bombs++; LEFT(); register_actor(act_static_bombs); break;
             case 0x58: case 0x59:
                 floorspikes2[n_floorspikes].x = X; floorspikes2[n_floorspikes].y = Y;
@@ -242,15 +248,23 @@ void spawn_level_actors(int rows)
 #undef OBJ8
 }
 
+/* (port) the editor's map, read instead of the file when set (port_editor.c) */
+const uint8_t *port_map_override;
+/* (port) the editor's play-test helper: Duke takes no damage (0 in the game) */
+int port_god;
+
 /* 0097:DE26  read the 128x90 cell map */
 static void read_map(const char *name)
 {
-    FILE *f = fopen(game_path(name), "rb");
+    FILE *f;
+    if (port_map_override) { memcpy(mapbuf, port_map_override, 0x5A00); return; }   /* (port) editor */
+    if (pack_map(level_index)) { memcpy(mapbuf, pack_map(level_index), 0x5A00); return; }   /* (port) a pack */
+    f = fopen(game_path(name), "rb");
     if (f) { size_t n = fread(mapbuf, 2, 0x2D00, f); (void)n; fclose(f); }
 }
 
 /* 0097:10FB  load a tile file into the VRAM tile cache at A000:4000+vram */
-void load_tiles(const char *name, uint16_t vram, int bytes);   /* files.c */
+int  load_tiles(const char *name, uint16_t vram, int bytes);   /* files.c */
 
 /* ------------------------------------------------------------------ */
 /* 0097:E3E0  reset per-level state, load map + backdrop, spawn actors */
@@ -306,8 +320,21 @@ void load_level(const char *name)
     read_map(name);
     WRITE_MODE_NORMAL();
     if (level_index % 2 == 0) {
-        load_tiles(ds_farstr((uint16_t)(0xB47 + level_index * 4)), 0x4000, 0x5140);
-        load_tiles(ds_farstr((uint16_t)(0xB47 + (level_index + 1) * 4)), 0x8100, 0x5140);
+        /* (port) a backdrop of the editor's or of a pack's own choosing: a game
+         * file (of any episode) or a picture of its own; a file the game folder
+         * doesn't hold falls back to the slot's stock one */
+        int k;
+        for (k = 0; k < 2; k++) {
+            uint16_t at = k ? 0x8100 : 0x4000;
+            const char *bn = NULL;
+            const uint8_t *d = NULL;
+            long n = 0;
+            if (port_drop[k].data || port_drop[k].name[0]) { d = port_drop[k].data; n = port_drop[k].len; bn = port_drop[k].name; }
+            else if (pack.on) bn = pack_backdrop(level_index, k, &d, &n);
+            if (d) load_tiles_mem(d, n, at, 0x5140);
+            else if (!bn || !load_tiles(bn, at, 0x5140))
+                load_tiles(ds_farstr((uint16_t)(0xB47 + (level_index + k) * 4)), at, 0x5140);
+        }
     }
     if (level_index % 2 == 0) {
         bonus_d247 = 1;
@@ -346,6 +373,7 @@ void new_game(void)
     score = 0;
     bonus_d57c = 0; bonus_4ed6 = 0; bonus_531c = 0;
     level_index = 0;
+    if (port_start_level >= 0) { level_index = port_start_level; port_start_level = -1; }   /* (port) --level */
     health = 9;
     if (restoring_game) {
         restore_game(save_slot);

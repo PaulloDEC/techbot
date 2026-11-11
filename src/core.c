@@ -86,6 +86,10 @@ int player_in_span(int x0, int x1, int y)
 #define MAX_SPENT 32
 static Obj8 spent[MAX_SPENT];
 void shots_spent_clear(void) { memset(spent, 0, sizeof spent); }
+/* (port) for port_state.c's in-memory snapshots */
+size_t shots_spent_size(void) { return sizeof spent; }
+void   shots_spent_get(void *b) { memcpy(b, spent, sizeof spent); }
+void   shots_spent_set(const void *b) { memcpy(spent, b, sizeof spent); }
 
 /* the original's activity window (offscreen() without the port's widening) */
 static int orig_offscreen(int x, int y)

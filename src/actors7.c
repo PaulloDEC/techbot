@@ -51,7 +51,8 @@ void act_reactor(void)
         draw_sprite(g, SCREEN_X(reactor_x), SCREEN_Y(reactor_y));
         if (!offscreen(reactor_x, reactor_y - 0x80))  draw_sprite(g, SCREEN_X(reactor_x), SCREEN_Y(reactor_y) - 16);
         if (!offscreen(reactor_x, reactor_y - 0x100)) draw_sprite(g, SCREEN_X(reactor_x), SCREEN_Y(reactor_y) - 32);
-        if (player_touches(reactor_x, reactor_y - 0x40) && health > 0) { health = 0; draw_health(); }
+        if (player_touches(reactor_x, reactor_y - 0x40) && health > 0 && !port_god) {   /* (port) port_god: editor */
+            health = 0; draw_health(); }
         return;
     }
 

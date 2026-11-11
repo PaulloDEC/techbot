@@ -21,13 +21,13 @@ static FILE *gopen(const char *name, const char *mode) { return fopen(game_path(
  * 'bytes' is the per-call budget; one iteration writes one byte to each of
  * the 4 planes (the mask byte is skipped).  Reading past EOF yields FFh,
  * exactly like Turbo C's fgetc() returning EOF. */
-void load_tiles(const char *name, uint16_t vram, int bytes)
+int load_tiles(const char *name, uint16_t vram, int bytes)   /* (port) 0 = no such file */
 {
     FILE *f;
     int i, n = bytes / 4, p;
-    if (!name || !*name) return;
+    if (!name || !*name) return 0;
     f = gopen(name, "rb");
-    if (!f) return;
+    if (!f) return 0;
     fgetc(f); fgetc(f); fgetc(f);
     for (i = 0; i < n; i++) {
         fgetc(f);
@@ -37,7 +37,19 @@ void load_tiles(const char *name, uint16_t vram, int bytes)
         }
     }
     fclose(f);
+    return 1;
 }
+
+/* (port) the same from a file in memory (a pack's backdrop) */
+void load_tiles_mem(const uint8_t *data, long len, uint16_t vram, int bytes)
+{
+    int i, n = bytes / 4, p;
+    long at = 4;                         /* the header, then each group's mask byte skipped */
+    for (i = 0; i < n; i++, at++)        /* past the end: 0FFh, as fgetc's EOF is in load_tiles */
+        for (p = 0; p < 4; p++, at++) ega_planes[p][(uint16_t)(0x4000 + vram + i)] = at < len ? data[at] : 0xFF;
+}
+
+PortDrop port_drop[2];                   /* (port) see port.h */
 
 /* 0097:295E  sprite file -> RAM (skip 3-byte header) */
 static void load_raw(const char *name, uint8_t *dst, int bytes)
@@ -61,7 +73,7 @@ static uint8_t *load_screen(const char *name)
 /* demo files: 16-bit length, then 6 bytes per frame (0097:DE71 / DEE9) */
 static void load_demo(const char *name, uint8_t *buf, uint16_t *len, int user)
 {
-    FILE *f = gopen(name, "rb");
+    FILE *f = gopen(pack_file_name(name), "rb");
     if (!f) { demo_available = 0; if (user) demo_missing = 1; return; }
     if (user) demo_missing = 0;
     *len = (uint16_t)(fgetc(f) | (fgetc(f) << 8));
@@ -71,7 +83,7 @@ static void load_demo(const char *name, uint8_t *buf, uint16_t *len, int user)
 }
 static void save_demo(const char *name, const uint8_t *buf, uint16_t len)
 {
-    FILE *f = gopen(name, "wb");
+    FILE *f = gopen(pack_file_name(name), "wb");
     if (!f) return;
     fputc(len & 0xFF, f); fputc(len >> 8, f);
     fwrite(buf, 0x4268, 1, f);
@@ -84,6 +96,19 @@ void ui_fade_in(int d);
 void ui_loading(void);
 void ui_clear_page0(void);
 void ui_apogee(void);
+/* (port) the two cards shown while the game loads (LOADING and the Apogee
+ * one) were on screen for as long as the disk took; on a modern machine they
+ * flash past.  Techbot holds each at least this many timer ticks (145 Hz),
+ * or until a key; 0 (the editor, the test build) = as the original. */
+int port_card_hold;
+static uint16_t hold_from;
+static void hold_card(uint16_t from)
+{
+    if (!port_card_hold) return;
+    last_scancode = 0;
+    SPIN_WHILE((uint16_t)(timer_ticks - from) < port_card_hold && (last_scancode == 0 || (last_scancode & 0x80)));
+}
+
 void load_graphics(void)
 {
     load_tiles(ds_str(0x08D6), 0x3000, 0x1E00);                 /* border  */
@@ -117,6 +142,7 @@ void load_graphics(void)
     ui_fade_out(5);
     ui_loading();
     ui_fade_in(5);
+    hold_from = timer_ticks;
     load_raw(ds_str(0x08F5), numbers_gfx, 0x1F40);
     load_raw(ds_str(0x0901), object_gfx, 0x1F40);
     load_raw(ds_str(0x090D), object_gfx + 0x1F40, 0x1F40);
@@ -131,12 +157,14 @@ void load_graphics(void)
     load_tiles(ds_str(0x096C), 0x0600, 0x1E00);
     load_tiles(ds_str(0x0976), 0x0C00, 0x1E00);
     load_tiles(ds_str(0x0980), 0x1200, 0x1E00);
+    hold_card(hold_from);
     ui_fade_out(5);
     ui_clear_page0();
     load_tiles(ds_str(0x098A), 0x1800, 0x1E00);
     load_tiles(ds_str(0x0995), 0x1E00, 0x1E00);
     ui_apogee();
     ui_fade_in(5);
+    hold_from = timer_ticks;
     load_tiles(ds_str(0x09A0), 0x2400, 0x1E00);
     load_tiles(ds_str(0x09AB), 0x2A00, 0x1E00);
     load_tiles(ds_str(0x09B6), 0x3000, 0x1E00);
@@ -146,6 +174,7 @@ void load_graphics(void)
     load_raw(ds_str(0x09DF), anim_gfx + 0x5A00, 0x1E00);
     load_raw(ds_str(0x09E9), anim_gfx + 0x7800, 0x1E00);
     load_raw(ds_str(0x09F3), anim_gfx + 0x9600, 0x1E00);
+    hold_card(hold_from);
     ui_fade_out(5);
 }
 
@@ -158,6 +187,14 @@ void load_screens(void)
     screen_img[2] = load_screen(ds_str(0x0AE0));   /* bad guy          */
     screen_img[3] = load_screen(ds_str(0x0AEB));   /* duke             */
     screen_img[4] = load_screen(ds_str(0x0AF4));   /* credits          */
+}
+/* (port) the END picture again: a pack's ending borrowed from another episode
+ * shows that episode's (the others are the same in all three) */
+void reload_end_screen(void)
+{
+    uint8_t *b = load_screen(ds_str(0x0AD8));
+    free(screen_img[1]);
+    screen_img[1] = b;
 }
 /* (port) for replacement art (port_art.c) */
 const char *picture_name(int idx) { return idx >= 0 && idx < 5 ? ds_str(screen_name_off[idx]) : NULL; }
@@ -172,8 +209,12 @@ void load_keys(const char *name)
     for (i = 0; i < 6; i++) key_bind[i] = (uint8_t)fgetc(f);
     fclose(f);
 }
+int port_no_disk;                        /* (port) see port.h */
+int port_sim;                            /* (port) see port.h */
+int port_boxes_open;                     /* (port) see port.h */
 void save_keys(const char *name)
 {
+    if (port_no_disk) return;            /* (port) a play-test in Shrapnel */
     FILE *f = gopen(name, "wb");
     int i;
     if (!f) return;
@@ -191,6 +232,7 @@ void load_speed(const char *name)
 }
 void save_speed(const char *name)
 {
+    if (port_no_disk) return;            /* (port) a play-test in Shrapnel */
     FILE *f = gopen(name, "wb");
     if (!f) return;
     fputc(game_speed & 0xFF, f); fputc((game_speed >> 8) & 0xFF, f);
@@ -199,6 +241,7 @@ void save_speed(const char *name)
 
 void save_demos(void)
 {
+    if (port_no_disk) return;            /* (port) a play-test in Shrapnel */
     save_demo(ds_str(0x0B22), demo_user, demo_len_user);
     save_demo(ds_str(0x0B2F), demo_my, demo_len_my);
 }
@@ -210,8 +253,10 @@ void save_demos(void)
  * ---------------------------------------------------------------- */
 static void slot_name(char *out, uint16_t tmpl, uint8_t slot)
 {
-    strcpy(out, ds_str(tmpl));
-    out[5] = (char)slot;
+    char b[32];
+    strcpy(b, ds_str(tmpl));
+    b[5] = (char)slot;
+    strcpy(out, pack_file_name(b));      /* (port) a pack's saves are its own */
 }
 static void putw16(int v, FILE *f) { fputc(v & 0xFF, f); fputc((v >> 8) & 0xFF, f); }
 static int  getw16(FILE *f) { int lo = fgetc(f), hi = fgetc(f); return (int16_t)(lo | (hi << 8)); }
@@ -219,7 +264,7 @@ static int  getw16(FILE *f) { int lo = fgetc(f), hi = fgetc(f); return (int16_t)
 /* (port) peek at slot '1'..'9' for the slot picker: 1 if the file exists */
 int save_slot_info(int slot, int *lvl_index, long *sc)
 {
-    char name[32];
+    char name[160];
     FILE *f;
     int i;
     slot_name(name, 0x0722, (uint8_t)('0' + slot));
@@ -235,7 +280,8 @@ int save_slot_info(int slot, int *lvl_index, long *sc)
 
 void save_game(uint8_t slot)
 {
-    char name[32];
+    if (port_no_disk) return;            /* (port) a play-test in Shrapnel */
+    char name[160];
     FILE *f;
     slot_name(name, 0x0722, slot);
     f = gopen(name, "wb");
@@ -254,7 +300,7 @@ void ui_box(int x, int row, int h);
 void ui_text(const char *s, int x, int row);
 int restore_game(int slot)
 {
-    char name[32];
+    char name[160];
     uint8_t first = last_scancode;
     FILE *f;
     long sc = 0;
