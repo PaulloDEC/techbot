@@ -15,7 +15,7 @@ LIB      = build/libtechbot_core.a
 CXX     ?= g++
 CXXFLAGS ?= -std=c++17 -O2 -Wall
 IMGUI    = shrapnel/third_party/imgui
-SH_CXX   = shrapnel/src/main.cpp shrapnel/src/episode.cpp shrapnel/src/selftest.cpp shrapnel/src/catalog.cpp shrapnel/src/picture.cpp shrapnel/src/theme.cpp shrapnel/src/tools.cpp shrapnel/src/doc.cpp shrapnel/src/filedlg.cpp shrapnel/src/project.cpp shrapnel/src/checks.cpp $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp $(IMGUI)/imgui_tables.cpp \
+SH_CXX   = shrapnel/src/main.cpp shrapnel/src/episode.cpp shrapnel/src/tile_names.cpp shrapnel/src/selftest.cpp shrapnel/src/catalog.cpp shrapnel/src/picture.cpp shrapnel/src/theme.cpp shrapnel/src/tools.cpp shrapnel/src/doc.cpp shrapnel/src/filedlg.cpp shrapnel/src/project.cpp shrapnel/src/checks.cpp $(IMGUI)/imgui.cpp $(IMGUI)/imgui_draw.cpp $(IMGUI)/imgui_tables.cpp \
            $(IMGUI)/imgui_widgets.cpp $(IMGUI)/backends/imgui_impl_sdl2.cpp $(IMGUI)/backends/imgui_impl_sdlrenderer2.cpp
 SH_OBJS  = $(patsubst %.cpp,build/obj/sh/%.o,$(notdir $(SH_CXX))) build/obj/sh/pf_shrapnel.o build/obj/sh/pf_sdl_embed.o
 

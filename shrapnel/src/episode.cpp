@@ -71,12 +71,12 @@ static const char *const names[N_ACTORS] = {
     "Helicopter",                    /* 3022 */
     "Balloon (crate)",               /* 3023 */
     "Security camera",               /* 3024 */
-    "Decoration 3025h",              /* 3025 */
-    "Decoration 3026h",              /* 3026 */
-    "Decoration 3027h",              /* 3027 */
-    "Decoration 3028h",              /* 3028 */
+    "Dark Vertical Steel Girder, Damaged Top",              /* 3025 */
+    "Damaged Wall Right",              /* 3026 */
+    "Damaged Wall Left",              /* 3027 */
+    "Window with Bars",              /* 3028 */
     "Atomic health (crate)",         /* 3029 */
-    "Sign",                          /* 302A */
+    "ACME Sign",                          /* 302A */
     "Reactor",                       /* 302B */
     "Floor spikes",                  /* 302C */
     "Flag (crate)",                  /* 302D */
@@ -95,9 +95,9 @@ static const char *const names[N_ACTORS] = {
     "Letter E (crate)",              /* 303A */
     "Rabbit",                        /* 303B */
     "Fire monster",                  /* 303C */
-    "Decoration 303Dh",              /* 303D */
-    "Decoration 303Eh",              /* 303E */
-    "Decoration 303Fh",              /* 303F */
+    "Chain-Link Fence",              /* 303D */
+    "Three-Panel Window, Left",              /* 303E */
+    "Three-Panel Window, Right",              /* 303F */
     "Note monitor",                  /* 3040 */
     "Dr. Proton screen",             /* 3041 */
     "Dr. Proton (episode 3 boss)",   /* 3042 */
@@ -145,6 +145,20 @@ const char *actor_name(uint16_t id)
 {
     return (id >= 0x3000 && id < 0x3000 + N_ACTORS) ? names[id - 0x3000] : NULL;
 }
+
+/* ---- tiles' names and sets (tile_names.cpp) */
+static const TileName *tile_entry(uint16_t v)
+{
+    static const TileName *by[0x3000 / 0x20];
+    static bool made;
+    if (!made) {
+        for (int i = 0; i < n_tile_names; i++) if (tile_names[i].v < 0x3000) by[tile_names[i].v / 0x20] = &tile_names[i];
+        made = true;
+    }
+    return v < 0x3000 && !(v & 0x1F) ? by[v / 0x20] : NULL;
+}
+const char *tile_name(uint16_t v) { const TileName *t = tile_entry(v); return t ? t->name : NULL; }
+const char *tile_set(uint16_t v) { const TileName *t = tile_entry(v); return t && t->set[0] ? t->set : NULL; }
 
 /* ---- episodes */
 bool Episode::load(int ep)

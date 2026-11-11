@@ -684,7 +684,8 @@ size); the sizes are kept in `settings.txt`.  The status bar describes the cell 
 13 x 10 tiles, which is how the game shows them with the camera at those
 positions (in play they stay fixed to the screen).
 
-**View > Theme** switches between a dark and a light look and sets the
+**View > Interface size** makes everything bigger or smaller than your
+display's own scaling (60% to 200%).  **View > Theme** switches between a dark and a light look and sets the
 accent colour: seven presets or your own (a colour wheel).  Both are kept in
 `settings.txt`.  The interface uses Inter (SIL Open Font License) and
 Google's Material Symbols icons (Apache 2.0), built in; the licences are in
@@ -706,8 +707,13 @@ Google's Material Symbols icons (Apache 2.0), built in; the licences are in
 
 The brush is chosen in the palette (right): **Tiles** (backdrop, animated,
 background and solid, as the episode has them) or **Actors**.  The search
-box finds a tile or actor by its words or its value; the card at the top
-shows the brush (and, for the Eraser, backdrop A or B).
+box finds a tile or actor by its name, its set or its value; the card at the
+top shows the brush (and, for the Eraser, backdrop A or B).  Every tile has a
+name, and tiles of a kind (a 3 x 3 panel, a girder, a border) are kept together
+as a **set**, on a shaded band, top row first.  The names and sets come from
+the objects sheet: `tools/tile_names.py DN1_objects.xlsx` remakes
+`shrapnel/src/tile_names.cpp` from it.  The **Backdrop** chip shows the open
+level's two backdrops as pictures.
 
 | Command | Keys |
 |---|---|

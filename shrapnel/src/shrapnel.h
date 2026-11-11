@@ -35,6 +35,11 @@ enum CellKind { CK_BACKDROP_A, CK_BACKDROP_B, CK_ANIMATED, CK_BACKGROUND, CK_SOL
 CellKind    cell_kind(uint16_t v);
 const char *cell_kind_name(CellKind k);
 const char *actor_name(uint16_t id);            /* 3000h..3059h, else NULL */
+struct TileName { uint16_t v; const char *name, *set; };
+extern const TileName tile_names[];             /* (tile_names.cpp, made from the objects sheet) */
+extern const int n_tile_names;
+const char *tile_name(uint16_t v);              /* a tile's name, else NULL */
+const char *tile_set(uint16_t v);               /* the set it belongs to (tiles of a kind), else NULL */
 bool        actor_crate(uint16_t id);           /* a crate with something inside */
 
 /* ---- an episode's graphics and actor looks */

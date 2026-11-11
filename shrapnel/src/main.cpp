@@ -109,6 +109,8 @@ static double clock_s() { return (double)(SDL_GetPerformanceCounter() - clock_st
 static ImVec2 last_canvas(1000, 700);
 static int pending_at_c = -1, pending_at_r = -1;
 static float ui_scale = 1;
+static float ui_auto = 1, ui_user = 1;         /* ui_scale = the display's, times the size chosen in View */
+static bool ui_rescale;                         /* (the size changed: new fonts before the next frame) */
 static double last_autosave;
 static int edits;                           /* changes since the last autosave */
 static bool want_quit, quit_now;
@@ -561,6 +563,7 @@ static void settings_save(void)
     fprintf(f, "theme = %s\n", theme_dark ? "dark" : "light");
     fprintf(f, "accent = %06X\n", theme_accent & 0xFFFFFF);
     fprintf(f, "sidebar = %d\npalette = %d\ndrawer = %d\n", (int)side_w, (int)right_w, (int)drawer_hu);
+    fprintf(f, "ui_size = %d\n", (int)(ui_user * 100 + 0.5f));
     fclose(f);
 }
 static void settings_load(void)
@@ -575,6 +578,7 @@ static void settings_load(void)
         else if (!strncmp(b, "sidebar", 7) && strchr(b, '=')) side_w = (float)atof(strchr(b, '=') + 1);
         else if (!strncmp(b, "palette", 7) && strchr(b, '=')) right_w = (float)atof(strchr(b, '=') + 1);
         else if (!strncmp(b, "drawer", 6) && strchr(b, '=')) drawer_hu = (float)atof(strchr(b, '=') + 1);
+        else if (!strncmp(b, "ui_size", 7) && strchr(b, '=')) ui_user = std::max(0.5f, std::min(3.0f, (float)atof(strchr(b, '=') + 1) / 100));
     fclose(f);
 }
 static void run_check(void)                 /* Check (F7) */
@@ -1180,6 +1184,15 @@ static void menu_bar(void)
         if (ImGui::MenuItem("Checks panel", NULL, dr, editing())) { drawer_open = !dr; drawer_tab = 0; }
         if (ImGui::MenuItem("History panel", NULL, hi, editing())) { drawer_open = !hi; drawer_tab = 1; }
         ImGui::Separator();
+        if (ImGui::BeginMenu("Interface size")) {
+            static const int sizes[] = { 60, 70, 80, 90, 100, 110, 125, 150, 175, 200 };
+            for (int pc : sizes) {
+                char l[32];
+                snprintf(l, sizeof l, pc == 100 ? "%d%% (your display's)" : "%d%%", pc);
+                if (ImGui::MenuItem(l, NULL, (int)(ui_user * 100 + 0.5f) == pc)) { ui_user = pc / 100.0f; ui_rescale = true; settings_save(); }
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Theme")) {
             if (ImGui::MenuItem(ICON_DARK_MODE "  Dark", NULL, theme_dark)) { theme_dark = true; theme_apply(ui_scale); settings_save(); }
             if (ImGui::MenuItem(ICON_LIGHT_MODE "  Light", NULL, !theme_dark)) { theme_dark = false; theme_apply(ui_scale); settings_save(); }
@@ -1333,7 +1346,9 @@ static std::string value_text(uint16_t v)
 {
     char b[96];
     CellKind k = cell_kind(v);
-    snprintf(b, sizeof b, "%04Xh  %s", v, k == CK_ACTOR ? actor_name(v) : cell_kind_name(k));
+    const char *tn = k == CK_ACTOR ? NULL : tile_name(v);
+    if (tn) snprintf(b, sizeof b, "%04Xh  %s (%s)", v, tn, cell_kind_name(k));
+    else snprintf(b, sizeof b, "%04Xh  %s", v, k == CK_ACTOR ? actor_name(v) : cell_kind_name(k));
     return b;
 }
 
@@ -1831,12 +1846,22 @@ static void brush_card(void)
     ImGui::BeginGroup();
     CellKind k = cell_kind(ed.brush);
     ImGui::PushFont(font_bold);
-    ImGui::TextUnformatted(k == CK_ACTOR ? actor_name(ed.brush) : cell_kind_name(k));
+    {   /* its name, cut short with an ellipsis where the card is narrow (the tooltip has it whole) */
+        const char *nm = k == CK_ACTOR ? actor_name(ed.brush) : tile_name(ed.brush) ? tile_name(ed.brush) : cell_kind_name(k);
+        std::string t = nm;
+        float room = ImGui::GetContentRegionAvail().x;
+        bool cut = false;
+        while (t.size() > 1 && ImGui::CalcTextSize((t + (cut ? "\xE2\x80\xA6" : "")).c_str()).x > room) { t.pop_back(); cut = true; }
+        if (cut) { while (!t.empty() && (t.back() == ' ' || t.back() == ',')) t.pop_back(); t += "\xE2\x80\xA6"; }
+        ImGui::TextUnformatted(t.c_str());
+        if (cut && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", nm);
+    }
     ImGui::PopFont();
     if (k == CK_ACTOR && actor_flip(ed.brush) != ed.brush) ImGui::TextDisabled("%04Xh · F: %s", ed.brush, actor_name(actor_flip(ed.brush)));
     else if (k == CK_ACTOR) ImGui::TextDisabled("%04Xh", ed.brush);
     else {
-        ImGui::TextDisabled("%04Xh · eraser paints", ed.brush);
+        if (tile_name(ed.brush)) ImGui::TextDisabled("%04Xh %s · eraser", ed.brush, cell_kind_name(k));
+        else ImGui::TextDisabled("%04Xh · eraser paints", ed.brush);
         ImGui::SameLine(0, 4 * ui_scale);
         if (chip("A", ed.erase == 0)) ed.erase = 0;
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The Eraser paints backdrop A");
@@ -1847,6 +1872,70 @@ static void brush_card(void)
     ImGui::EndGroup();
     ImGui::EndChild();
     ImGui::PopStyleVar();
+}
+
+/* Where a tile sits in its set, from the words of its name: top row first,
+ * left to right ("Top-Left", "Centre", "Bottom-Right", "Cap Left"...). */
+static int tile_place(const char *n)
+{
+    int v = strstr(n, "Top") ? 0 : strstr(n, "Bottom") ? 2 : 1;
+    int h = strstr(n, "Left") ? 0 : strstr(n, "Right") ? 2 : 1;
+    return v * 3 + h;
+}
+
+/* the tiles from `from` to `to`, in their sets: each set's tiles together
+ * (in place order), the sets in name order; a tile in no set is its own */
+static const std::vector<std::vector<uint16_t>> &tile_groups(int from, int to)
+{
+    static std::map<int, std::vector<std::vector<uint16_t>>> cache;
+    auto it = cache.find(from << 16 | to);
+    if (it != cache.end()) return it->second;
+    std::map<std::string, std::vector<uint16_t>> by;
+    for (int v = from; v <= to; v += 0x20) {
+        const char *st = tile_set((uint16_t)v), *nm = tile_name((uint16_t)v);
+        char key[160];
+        snprintf(key, sizeof key, "%s\x01%04X", st ? st : nm ? nm : "~", st ? 0 : v);   /* (ungrouped: each alone) */
+        by[key].push_back((uint16_t)v);
+    }
+    std::vector<std::vector<uint16_t>> &g = cache[from << 16 | to];
+    for (auto &kv : by) {
+        std::vector<uint16_t> t = kv.second;
+        std::stable_sort(t.begin(), t.end(), [](uint16_t a, uint16_t b) {
+            const char *na = tile_name(a), *nb = tile_name(b);
+            if (!na || !nb) return a < b;
+            int pa = tile_place(na), pb = tile_place(nb);
+            return pa != pb ? pa < pb : strcmp(na, nb) < 0;
+        });
+        g.push_back(t);
+    }
+    return g;
+}
+
+/* the two backdrops, big enough to tell apart */
+static void pal_backdrops(void)
+{
+    float w = ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize;
+    float tw = std::min(w, ED_BD_W * 2 * ui_scale), th = tw * ED_BD_H / ED_BD_W;
+    ProjEntry &e = proj.entries[cur];
+    for (int k = 0; k < 2; k++) {
+        uint16_t v = (uint16_t)(k ? 0x20 : 0);
+        ImGui::PushID(k);
+        ImVec2 q = ImGui::GetCursorScreenPos();
+        if (ImGui::InvisibleButton("bd", ImVec2(tw, th))) {
+            ed.brush = v;
+            if (ed.tool == T_SELECT || ed.tool == T_MOVE || ed.tool == T_MAGIC || ed.tool == T_PICK) ed.tool = T_PENCIL;
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%04Xh  Backdrop %c: paints cells that show backdrop %c", v, k ? 'B' : 'A', k ? 'B' : 'A');
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        dl->AddImage(tid(bd_tex[k]), q, ImVec2(q.x + tw, q.y + th));
+        if (ed.brush == v) dl->AddRect(q, ImVec2(q.x + tw, q.y + th), ImGui::GetColorU32(T.accent_text), 3, 0, 2 * ui_scale);
+        std::string what = !e.drop_data[k].empty() ? "its own picture" : e.drop[k].empty() ? stock_drop_name(e.backdrop, k) : e.drop[k];
+        ImGui::Text("%c: %s", k ? 'B' : 'A', what.c_str());
+        ImGui::Spacing();
+        ImGui::PopID();
+    }
+    hint("These are the open level's two backdrops (chosen in the sidebar). Cells painted with A show A; with B, B.");
 }
 
 static void pal_tiles(float w)
@@ -1869,11 +1958,77 @@ static void pal_tiles(float w)
     switch (cat) {
     case 0:  from = 0; to = 0x20; break;
     case 1:  from = 0x40; to = 0x5C0; break;     /* (5E0h and up are plain background) */
-    case 2:  from = 0x600; to = 0x17E0; break;
+    case 2:  from = 0x5E0; to = 0x17E0; break;
     default: from = 0x1800; to = 0x2FE0; break;
     }
     if (pal_find[0]) { from = 0; to = 0x2FE0; }  /* searching: every tile whose words match ("1820", "solid") */
     ImGui::BeginChild("##tiles", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    if (cat == 0 && !pal_find[0]) { pal_backdrops(); ImGui::EndChild(); return; }
+    if ((cat >= 2 || pal_find[0])) {
+        /* background and solid tiles in their sets: a set starts a new row when
+           it would not fit on this one, sits on a shaded band, and the sets on
+           a row have a gap between them */
+        float avail = ImGui::GetContentRegionAvail().x, gap = 6 * ui_scale;
+        float cell = 34 * ui_scale;
+        int per_row = std::max(1, (int)(avail / cell));
+        cell = floorf(avail / per_row);
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        ImVec2 o = ImGui::GetCursorScreenPos();
+        float x = 0, y = 0;
+        dl->ChannelsSplit(2);
+        {
+            int lo = pal_find[0] ? 0x40 : from, hi = pal_find[0] ? 0x2FE0 : to;   /* (searching: all but the backdrops) */
+            for (const std::vector<uint16_t> &grp : tile_groups(lo, hi)) {
+                std::vector<uint16_t> t;
+                for (uint16_t v : grp) {
+                    if (v < 0x5E0 && (v & 0x7F)) continue;          /* (an animation: its first frame stands for it) */
+                    if (!pal_find[0] || pal_match(value_text(v)) || (tile_set(v) && pal_match(tile_set(v)))) t.push_back(v);
+                }
+                if (t.empty()) continue;
+                int k = (int)t.size();
+                float need = k * cell;
+                if (x > 0 && x + need > avail + 0.5f && k <= per_row) { x = 0; y += cell + gap; }   /* (a new row for it) */
+                else if (x > 0) x += gap;
+                if (x > 0 && x + cell > avail + 0.5f) { x = 0; y += cell + gap; }
+                float bx = x, by = y;
+                for (int i = 0; i < k; i++) {
+                    if (x + cell > avail + 0.5f) {      /* a set longer than a row wraps */
+                        dl->ChannelsSetCurrent(0);
+                        if (k > 1) dl->AddRectFilled(ImVec2(o.x + bx - 2, o.y + by - 2), ImVec2(o.x + x + 2, o.y + by + cell + 2),
+                                                     ImGui::GetColorU32(ImVec4(T.border.x, T.border.y, T.border.z, 0.9f)), 4 * ui_scale);
+                        x = 0; y += cell + gap; bx = 0; by = y;
+                    }
+                    uint16_t v = t[i];
+                    ImVec2 q(o.x + x, o.y + y);
+                    ImGui::SetCursorScreenPos(q);
+                    ImGui::PushID(v);
+                    if (ImGui::InvisibleButton("t", ImVec2(cell, cell))) {
+                        ed.brush = v;
+                        if (ed.tool == T_SELECT || ed.tool == T_MOVE || ed.tool == T_MAGIC || ed.tool == T_ERASER || ed.tool == T_PICK) ed.tool = T_PENCIL;
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        const char *st = tile_set(v);
+                        if (st) ImGui::SetTooltip("%s\nSet: %s", value_text(v).c_str(), st);
+                        else ImGui::SetTooltip("%s", value_text(v).c_str());
+                    }
+                    ImGui::PopID();
+                    dl->ChannelsSetCurrent(1);
+                    float pad = 1 * ui_scale;
+                    value_image(dl, ImVec2(q.x + pad, q.y + pad), cell - 2 * pad, v, view.phase * 0x20);
+                    if (ed.brush == v) dl->AddRect(q, ImVec2(q.x + cell, q.y + cell), ImGui::GetColorU32(T.accent_text), 3, 0, 2 * ui_scale);
+                    x += cell;
+                }
+                dl->ChannelsSetCurrent(0);
+                if (k > 1) dl->AddRectFilled(ImVec2(o.x + bx - 2, o.y + by - 2), ImVec2(o.x + x + 2, o.y + by + cell + 2),
+                                             ImGui::GetColorU32(ImVec4(T.border.x, T.border.y, T.border.z, 0.9f)), 4 * ui_scale);
+            }
+        }
+        dl->ChannelsMerge();
+        ImGui::SetCursorScreenPos(ImVec2(o.x, o.y + y + cell + gap));
+        ImGui::Dummy(ImVec2(1, 1));
+        ImGui::EndChild();
+        return;
+    }
     /* Animated tiles: a cell shows its tile and the next three in
      * turn, and the animations come in groups of four at multiples
      * of 80h.  So each row is one group: the animation starting at
@@ -3753,6 +3908,8 @@ int main(int argc, char **argv)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = NULL;
     settings_load();                            /* (the theme, before the first frame) */
+    ui_auto = ui_scale;
+    ui_scale = ui_auto * ui_user;
     theme_fonts(ui_scale, fb_scale);
     theme_apply(ui_scale);
     ImGui_ImplSDL2_InitForSDLRenderer(win, ren);
@@ -3804,6 +3961,14 @@ int main(int argc, char **argv)
             }
         }
 
+        if (ui_rescale) {                       /* View > Interface size: the fonts again, at the new size */
+            ui_rescale = false;
+            ui_scale = ui_auto * ui_user;
+            ImGui::GetIO().Fonts->Clear();
+            theme_fonts(ui_scale, fb_scale);
+            ImGui_ImplSDLRenderer2_DestroyFontsTexture();
+            theme_apply(ui_scale);
+        }
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
