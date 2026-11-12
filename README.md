@@ -1,5 +1,9 @@
 # Techbot - An Enhanced PC Port of Duke Nukem
 
+and...
+
+# Shrapnel - A Modern Level Editor for Duke Nukem
+
 **AI Disclosure: Pretty much the entire project was created by Claude AI. Widescreen-enhanced backdrop artwork is the primary exception.**
 
 ## The Human Bit
@@ -17,8 +21,19 @@ of new features including:
  - Backdrop artwork extended (by hand, by a human) for widescreen play
  - Improved sound playback
  - Quicksave and Quickload
+ - Support for custom levels built in Shrapnel
  
  There might be more! I  honestly can't remember.
+ 
+Shrapnel allows users to edit existing levels or create entirely new
+ones in a clean, modern editor. Key features include:
+
+ - Support for Techbot enhanced or DOS compatible episodes
+ - Clean, easy-to-use interface
+ - Painstakingly categorised tiles, grouped by theme
+ - Level checking tool that scans your level for issues
+ - In-editor playtesting
+ - ...and much more
 
 If you're asking "Why?" about all of this, it's a valid question. Like many projects, this
 one started out simply because I had a couple of weeks of Claude to burn, and I was
