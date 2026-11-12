@@ -52,6 +52,24 @@ void joystick_buttons(void);              /* 0097:10A5 */
 void save_game(uint8_t slot);             /* 0097:0151 */
 
 /* ------------------------------------------------------------------ */
+/* (port) The window with bars and the chain-link fence / three-panel window
+ * show the backdrop through them, and the original always gives their cell
+ * backdrop A (0).  In Techbot's own levels (a pack, or a Techbot project in
+ * Shrapnel) the cell shows the backdrop most of its neighbours show, so one
+ * placed over backdrop B shows B.  Stock and DOS levels: A, as ever. */
+int port_techbot_rules;
+static uint16_t see_through_backdrop(uint16_t o)
+{
+    static const int16_t nb[4] = { -2, 2, -0x100, 0x100 };
+    int a = 0, b = 0, k;
+    if (!port_techbot_rules && !pack_map(level_index)) return 0;
+    for (k = 0; k < 4; k++) {
+        uint16_t v = MAP16((uint16_t)(o + nb[k]));
+        if (v == 0) a++; else if (v == 0x20) b++;
+    }
+    return b > a ? 0x20 : 0;
+}
+
 /* 0097:C287  scan the map for actor markers (cells >= 3000h)          */
 /* ------------------------------------------------------------------ */
 void spawn_level_actors(int rows)
@@ -172,7 +190,7 @@ void spawn_level_actors(int rows)
                 OBJ6(decor, n_decor, (id - 0x3026) * 0xA0 + 0x7F80); n_decor++;
                 if (id == 0x3026) LEFT(); else RIGHT();
                 break;
-            case 0x28: OBJ6(decor, n_decor, 0x80C0); n_decor++; MAP16(o) = 0; break;
+            case 0x28: OBJ6(decor, n_decor, 0x80C0); n_decor++; MAP16(o) = see_through_backdrop(o); break;
             case 0x29: OBJ6(molecules, n_molecules, 1); n_molecules++; register_actor(act_molecules); LEFT(); break;
             case 0x2A: OBJ6(signs, n_signs, 1); n_signs++; register_actor(act_signs); LEFT(); break;
             case 0x2B:
@@ -205,7 +223,7 @@ void spawn_level_actors(int rows)
             case 0x3B: OBJ8(rabbits, n_rabbits, 1, 0); n_rabbits++; register_actor(act_rabbits); LEFT(); break;
             case 0x3C: OBJ6(firemonsters, n_firemonsters, 1); n_firemonsters++; register_actor(act_firemonsters); LEFT(); break;
             case 0x3D: case 0x3E: case 0x3F:
-                OBJ6(decor, n_decor, (id - 0x303D) * 0xA0 + 0x9D80); n_decor++; MAP16(o) = 0; break;
+                OBJ6(decor, n_decor, (id - 0x303D) * 0xA0 + 0x9D80); n_decor++; MAP16(o) = see_through_backdrop(o); break;
             case 0x40: monitor_present = 1; monitor_x = X; monitor_y = Y; LEFT(); break;
             case 0x41: protonscreen_present = 1; protonscreen_state = 0; protonscreen_x = X; protonscreen_y = Y; LEFT(); break;
             case 0x42: case 0x43:

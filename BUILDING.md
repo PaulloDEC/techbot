@@ -627,8 +627,13 @@ Shrapnel closed with a new project unsaved, the start screen offers it back.
 - Under the level list, the level shown has (in Techbot projects):
   - **backdrops A and B**.  A level's backdrop cells (the open space behind
     the walls) show A, except the ones painted as B, so one level can have
-    two views.  Paint B with the Eraser set to B on the brush card, or the B
-    tile in *Tiles > Backdrop*; the sidebar counts the cells showing each.
+    two views.  Choose B in *Tiles > Backdrop* and paint with any tool
+    (Pencil, Line, Rectangle, Fill), or set the Eraser to B on the brush card;
+    protect the walls, background and actors to change only the open space.
+    The sidebar counts the cells showing each.  The see-through actors (the
+    window with bars, the chain-link fence and the three-panel window) show
+    the backdrop most of their neighbours show; in a DOS episode, as in the
+    original, always A.
     Click a picture to pick from every backdrop in the game folder,
     all three episodes, each picture once (the open episode's file first, so
     it needs no other episode); or **a picture of your own** - any PNG, made
@@ -696,14 +701,14 @@ Google's Material Symbols icons (Apache 2.0), built in; the licences are in
 | Tool | Key | |
 |---|---|---|
 | Select | `M` | drag a rectangle; Shift adds to the selection, Alt removes |
-| Move | `V` | drag the selection somewhere else (outside it: the cell under the mouse, an actor say); Shift: move a copy.  What's left behind is backdrop (an actor's cell: what the game shows there); locked cells stay put |
+| Move | `V` | drag the selection somewhere else (outside it: the actor whose picture is under the mouse - any part of it, outlined as you hover - else the cell); Shift: move a copy.  What's left behind is backdrop (an actor's cell: what the game shows there); locked cells stay put |
 | Magic select | `W` | click: the connected area of the same tile; Shift adds, Alt removes |
 | Pencil | `B` | paint the brush; Alt-click picks up the tile under the cursor |
 | Eraser | `E` | paint backdrop A (or B, chosen on the brush card) |
 | Line | `L` | drag a straight line |
 | Rectangle | `R` | drag a rectangle, outlined or filled (the *Filled* chip on the toolbar) |
 | Fill | `G` | fill the connected area of the same tile; Shift-click: every matching tile in the level |
-| Pick | `I` | click to take a tile or actor as the brush |
+| Pick | `I` | click to take a tile or actor as the brush (anywhere on an actor's picture takes the actor) |
 
 The brush is chosen in the palette (right): **Tiles** (backdrop, animated,
 background and solid, as the episode has them) or **Actors**.  The search
@@ -752,9 +757,9 @@ one per click, and its outline shows where it will be.
   brush (and then the doors); likewise the access card and card reader, the
   robot hand, hand reader and walkway, and the two teleporters.  The status
   bar says what comes next.
-- **Moving**: with the Select tool, drag an actor to another cell.  The cell
-  it leaves gets back what it held before, if the actor was put there in
-  this session; otherwise it keeps the tile the game showed there.  (When
+- **Moving**: with the Move tool (`V`), drag an actor to another cell (the
+  Select tool only selects).  The cell it leaves shows what the game showed
+  there.  (When
   a level loads, the game fills each actor's own cell by copying a
   neighbouring cell - which one depends on the actor - so an actor moved
   beside a tile shows that tile behind it, in the editor as in play.)
@@ -906,12 +911,13 @@ level's player start instead, carrying nothing, as the game begins it.
 | `F10` | start again from the same place |
 | `Esc` | the game's own quit question |
 
-The **Play** panel (right) sets what Duke starts with: boots, claws, robot
+The menu beside **Play here** sets what Duke starts with: boots, claws, robot
 hand, access card, keys, firepower, health, and whether he is
 invulnerable.  A play also ends when Duke reaches the exit, dies, or beats
-the boss; the status bar and the panel say which, and how long it took.
+the boss; the status bar says which, and how long it took.
 Back in the editor, the path Duke took is drawn over the map until the next
-edit.  Quicksave and quickload are off during a play-test, and nothing it
+edit; **Play-test path** in the status bar (or *View > Play-test path*)
+hides and shows it.  Quicksave and quickload are off during a play-test, and nothing it
 does (score, high scores, saved games, demos) is written to the game folder.
 
 ### Self-test

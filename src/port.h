@@ -139,6 +139,7 @@ typedef struct {
 } EdPiece;
 extern const uint8_t *port_map_override;  /* load_level reads the map from here when set */
 extern int port_god;                     /* editor play-test: no damage */
+extern int port_techbot_rules;           /* the level loading is a Techbot project's (Shrapnel; packs need no flag) */
 extern void (*dl_spy)(int type, const uint8_t *src, uint16_t tile, int col, int line);
 int  ed_boot(void);
 void ed_spin(void);

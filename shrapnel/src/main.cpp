@@ -72,7 +72,7 @@ static const ImGuiKey tool_keys[N_TOOLS] = { ImGuiKey_M, ImGuiKey_V, ImGuiKey_W,
 static struct {
     double x = 0, y = 0;                    /* world pixel at the canvas's top-left */
     double zoom = 2.0;                      /* screen points per game pixel */
-    bool actors = true, grid = false, animate = true, labels = true;
+    bool actors = true, grid = false, animate = true, labels = true, trail = true;
     int phase = 0;
     double phase_time = 0;
 } view;
@@ -90,9 +90,8 @@ static struct {
     int stroke_cells = 0, stroke_walled = 0;
     int sc0, sr0, sc1, sr1;                 /* stroke's changed area */
     bool told_mirror = false;
-    bool moving = false;                    /* Select dragging an actor to a new cell */
+
     std::vector<int32_t> under = std::vector<int32_t>(ED_MAP_CELLS, -1);   /* what a cell held before an actor was put on it (this session) */
-    uint16_t moving_id = 0;
     bool shifting = false;                  /* the Move tool dragging cells (lifted, below) */
     bool shift_copy = false;                /* ... leaving the originals where they were */
     int counts[ED_N_TABLES] = { 0 };        /* actor tables filled, as of the last change */
@@ -394,7 +393,7 @@ static void make_reach_checks(void)
         int c = -1, rr = -1;
         if (!at(0x3011, c, rr) && !at(0x3043, c, rr)) at(0x3042, c, rr);
         reach_checks.push_back({ CS_BROKEN, c, rr, r.goal == 2 ? "Duke can't reach Dr. Proton from the start" : "Duke can't reach the exit from the start",
-            std::string(how) + " None of it gets him there. The map shows where he can get to (green) when Reach is ticked under Show." });
+            std::string(how) + " None of it gets him there. The map shows where he can get to (green) with Reach on (Ctrl+R)." });
     }
     if (r.finish_ok && r.trap_cells) {
         int c = -1, rr = -1;
@@ -720,6 +719,7 @@ static std::string drop_buf[2];
 static void apply_drops(int i)
 {
     memset(port_drop, 0, sizeof port_drop);
+    port_techbot_rules = !proj.dos;             /* (see-through actors over backdrop B: game.c) */
     if (proj.dos || i < 0 || i >= (int)proj.entries.size()) return;
     int l = i;
     while (l > 0 && proj.entries[l].hallway) l--;
@@ -1180,6 +1180,7 @@ static void menu_bar(void)
         bool live = !checks_manual;
         if (ImGui::MenuItem("Check as you edit", NULL, &live)) set_checks_manual(!live);
         ImGui::MenuItem("Animate", NULL, &view.animate);
+        ImGui::MenuItem("Play-test path", NULL, &view.trail, !trail.empty());
         bool dr = drawer_open && drawer_tab == 0, hi = drawer_open && drawer_tab == 1;
         if (ImGui::MenuItem("Checks panel", NULL, dr, editing())) { drawer_open = !dr; drawer_tab = 0; }
         if (ImGui::MenuItem("History panel", NULL, hi, editing())) { drawer_open = !hi; drawer_tab = 1; }
@@ -1734,7 +1735,8 @@ static void backdrops_section(void)
     hint("A level has two backdrops. Its backdrop cells (the open space behind the walls) show A, "
          "except the ones painted as B, which show B: so one level can have two views, say a skyline "
          "outside and a cave further in.");
-    hint("To paint B: choose B on the Eraser's brush card, or the B tile in Tiles > Backdrop. "
+    hint("To paint B: choose B in Tiles > Backdrop and use any tool (Pencil, Rectangle, Fill...), or set the "
+         "Eraser to B on its brush card. Protect the other layers to paint only the open space. "
          "Click a picture to change it.");
     char cnt[96];
     snprintf(cnt, sizeof cnt, "This level: %d cells show A, %d show B.", na, nb);
@@ -1935,7 +1937,8 @@ static void pal_backdrops(void)
         ImGui::Spacing();
         ImGui::PopID();
     }
-    hint("These are the open level's two backdrops (chosen in the sidebar). Cells painted with A show A; with B, B.");
+    hint("These are the open level's two backdrops (chosen in the sidebar). Click one, then paint with any tool: "
+         "cells painted with A show A; with B, B. To change only the open space, protect the walls, background and actors.");
 }
 
 static void pal_tiles(float w)
@@ -2671,19 +2674,46 @@ static bool level_has(uint16_t id)
 
 /* Is map pixel (x, y) on the picture of a note monitor or Dr. Proton
  * screen, any part of it (they are drawn bigger than their cell)? */
-static bool on_message_actor(double x, double y)
+/* The actor whose picture covers map pixel (x, y): actors are kept in one
+ * cell but drawn bigger (Duke is two cells tall, the Dr. Proton screen two
+ * by two), so a click on any part of the picture means that actor.  The cell
+ * itself wins; else the nearest actor whose picture covers the pixel. */
+static bool actor_under(double x, double y, int *ac, int *ar)
 {
     int c0 = (int)floor(x / 16), r0 = (int)floor(y / 16);
-    for (int r = r0 - 3; r <= r0 + 3; r++)
-        for (int c = c0 - 3; c <= c0 + 3; c++) {
-            if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H || !shows_message(lv->at(c, r))) continue;
-            if (c == c0 && r == r0) return true;
-            for (const Piece &pc : ep.looks[lv->at(c, r) - 0x3000].pieces) {
+    if (c0 >= 0 && r0 >= 0 && c0 < MAP_W && r0 < MAP_H && cell_kind(lv->at(c0, r0)) == CK_ACTOR) { *ac = c0; *ar = r0; return true; }
+    int best = 1 << 30;
+    for (int r = r0 - 4; r <= r0 + 4; r++)
+        for (int c = c0 - 4; c <= c0 + 4; c++) {
+            if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H || cell_kind(lv->at(c, r)) != CK_ACTOR) continue;
+            int id = lv->at(c, r) - 0x3000;
+            if (id < 0 || id >= N_ACTORS) continue;
+            for (const Piece &pc : ep.looks[id].pieces) {
                 double px = c * 16 + pc.dx, py = r * 16 + pc.dy;
-                if (x >= px && x < px + 16 && y >= py && y < py + 16) return true;
+                int d = (c - c0) * (c - c0) + (r - r0) * (r - r0);
+                if (x >= px && x < px + 16 && y >= py && y < py + 16 && d < best) { best = d; *ac = c; *ar = r; }
             }
         }
-    return false;
+    return best < (1 << 30);
+}
+
+/* the box around an actor's picture, in map pixels */
+static bool actor_box(int c, int r, double *x0, double *y0, double *x1, double *y1)
+{
+    int id = lv->at(c, r) - 0x3000;
+    *x0 = c * 16; *y0 = r * 16; *x1 = *x0 + 16; *y1 = *y0 + 16;
+    if (id < 0 || id >= N_ACTORS) return false;
+    for (const Piece &pc : ep.looks[id].pieces) {
+        *x0 = std::min(*x0, (double)(c * 16 + pc.dx)); *y0 = std::min(*y0, (double)(r * 16 + pc.dy));
+        *x1 = std::max(*x1, (double)(c * 16 + pc.dx + 16)); *y1 = std::max(*y1, (double)(r * 16 + pc.dy + 16));
+    }
+    return true;
+}
+
+static bool on_message_actor(double x, double y)
+{
+    int c, r;
+    return actor_under(x, y, &c, &r) && shows_message(lv->at(c, r));
 }
 static double mouse_fx, mouse_fy;              /* the map pixel under the mouse */
 
@@ -2741,7 +2771,13 @@ static void tool_input(int c, int r, bool inside)
     if (press) msg_press_cur = inside && view.actors && on_message_actor(mouse_fx, mouse_fy) ? hist.cur : -1;
     Tool t = ed.tool;
     bool paint = t == T_PENCIL || t == T_ERASER || t == T_LINE || t == T_RECT || t == T_FILL;
-    if (paint && io.KeyAlt && press && inside) { ed.brush = lv->at(c, r); say("Brush: " + value_text(ed.brush)); return; }
+    if (paint && io.KeyAlt && press && inside) {
+        int pc = c, pr = r;
+        if (view.actors) actor_under(mouse_fx, mouse_fy, &pc, &pr);
+        ed.brush = lv->at(pc, pr);
+        say("Brush: " + value_text(ed.brush));
+        return;
+    }
 
     if (press && inside) {
         ed.dragging = true;
@@ -2783,20 +2819,25 @@ static void tool_input(int c, int r, bool inside)
             ed.dragging = false;
             break;
         }
-        case T_PICK:
-            ed.brush = lv->at(c, r);
+        case T_PICK: {
+            int pc = c, pr = r;                     /* (on an actor's picture: that actor) */
+            if (view.actors) actor_under(mouse_fx, mouse_fy, &pc, &pr);
+            ed.brush = lv->at(pc, pr);
             say("Brush: " + value_text(ed.brush));
             ed.dragging = false;
             break;
+        }
         case T_MAGIC:
             sel.magic(lv->map, c, r, mode);
             ed.dragging = false;
             break;
         case T_MOVE: {                          /* the selection, or what's under the mouse */
-            if (!sel.on[r * MAP_W + c]) {
-                if (cell_locked(lv->at(c, r), ed.locks)) { say("That cell is locked"); ed.dragging = false; break; }
+            int mc = c, mr = r;                     /* (on an actor's picture: that actor) */
+            if (!sel.on[r * MAP_W + c] && view.actors) actor_under(mouse_fx, mouse_fy, &mc, &mr);
+            if (!sel.on[mr * MAP_W + mc]) {
+                if (cell_locked(lv->at(mc, mr), ed.locks)) { say("That cell is locked"); ed.dragging = false; break; }
                 sel.clear();
-                sel.on[r * MAP_W + c] = 1;          /* (nothing selected there: just this cell) */
+                sel.on[mr * MAP_W + mc] = 1;        /* (nothing selected there: just this cell, or the actor) */
                 sel.update();
             }
             lifted.copy(lv->map, sel);
@@ -2805,12 +2846,6 @@ static void tool_input(int c, int r, bool inside)
             ed.shift_copy = io.KeyShift;
             break;
         }
-        case T_SELECT:                          /* on an actor (no Shift/Alt): drag it somewhere else */
-            if (!mode && cell_kind(lv->at(c, r)) == CK_ACTOR && !cell_locked(lv->at(c, r), ed.locks)) {
-                ed.moving = true;
-                ed.moving_id = lv->at(c, r);
-            }
-            break;
         default: break;
         }
         return;
@@ -2856,19 +2891,6 @@ static void tool_input(int c, int r, bool inside)
             int dc = c - ed.drag_c, dr = r - ed.drag_r, c0, r0, c1, r1;
             if ((dc || dr) && sel.bounds(c0, r0, c1, r1))
                 put_down(lifted, c0 + dc, r0 + dr, ed.shift_copy, ed.shift_copy ? "Moved a copy" : "Moved");
-        } else if (t == T_SELECT && ed.moving) {
-            ed.moving = false;
-            if ((c != ed.drag_c || r != ed.drag_r) && !cell_locked(lv->at(c, r), ed.locks)) {
-                Edit e(lv->map, ed.locks);
-                int from = ed.drag_r * MAP_W + ed.drag_c, to = r * MAP_W + c;
-                int32_t back = ed.under[from];  /* put back what was there, if it was put here this session */
-                ed.under[from] = -1;
-                if (cell_kind(lv->map[to]) != CK_ACTOR) ed.under[to] = lv->map[to];
-                e.set(ed.drag_c, ed.drag_r, back >= 0 ? (uint16_t)back : uncovered(lv->after, ed.drag_c, ed.drag_r, ed.moving_id, ed.erase));
-                e.set(c, r, ed.moving_id);
-                stroke_add(e);
-                if (ed.stroke_cells) commit(std::string("Moved ") + actor_name(ed.moving_id));
-            }
         } else if (t == T_SELECT) {
             sel.rect(ed.drag_c, ed.drag_r, c, r, mode);
         }
@@ -3009,7 +3031,18 @@ static void canvas(float x0, float y0, float w, float h)
             }
         }
 
-        if (trail.size() > 1) {                 /* Duke's path in the last play-test */
+        if ((ed.tool == T_MOVE || ed.tool == T_PICK) && hovered && view.actors) {   /* the actor a click would take */
+            int hc, hr;
+            double x0, y0, x1, y1;
+            if (actor_under(mouse_fx, mouse_fy, &hc, &hr) && !(ed.tool == T_MOVE && sel.on[hr * MAP_W + hc]) && !ed.dragging &&
+                actor_box(hc, hr, &x0, &y0, &x1, &y1)) {
+                dl->AddRect(ImVec2(a.x + (float)(x0 * view.zoom) - 1, a.y + (float)(y0 * view.zoom) - 1),
+                            ImVec2(a.x + (float)(x1 * view.zoom) + 1, a.y + (float)(y1 * view.zoom) + 1),
+                            ImGui::GetColorU32(T.accent), 2 * ui_scale, 0, 1.5f * ui_scale);
+            }
+        }
+
+        if (trail.size() > 1 && view.trail) {   /* Duke's path in the last play-test */
             std::vector<ImVec2> pts;
             pts.reserve(trail.size());
             for (const ImVec2 &t : trail) pts.push_back(ImVec2(a.x + t.x * (float)view.zoom, a.y + t.y * (float)view.zoom));
@@ -3040,7 +3073,7 @@ static void canvas(float x0, float y0, float w, float h)
                 dl->AddRectFilled(q, ImVec2(q.x + cell, q.y + cell), IM_COL32(255, 220, 0, 90));
             else dl->AddImage(tid(atlas), q, ImVec2(q.x + cell, q.y + cell), ta, tb, IM_COL32(255, 255, 255, 200));
         }
-        if (ed.tool == T_SELECT && ed.dragging && !ed.moving) {
+        if (ed.tool == T_SELECT && ed.dragging) {
             ImVec2 q = cell_pos(std::min(ed.drag_c, ed.last_c), std::min(ed.drag_r, ed.last_r));
             ImVec2 e = cell_pos(std::max(ed.drag_c, ed.last_c) + 1, std::max(ed.drag_r, ed.last_r) + 1);
             dl->AddRectFilled(q, e, IM_COL32(80, 160, 255, 50));
@@ -3065,8 +3098,8 @@ static void canvas(float x0, float y0, float w, float h)
                 dl->AddRect(q, ImVec2(q.x + clip.w * cell, q.y + clip.h * cell), IM_COL32(255, 220, 0, 255), 0, 0, 1.5f);
             } else {
                 ImVec2 q = cell_pos(mc, mr);
-                uint16_t ghost = ed.moving ? ed.moving_id : (ed.tool == T_PENCIL && cell_kind(ed.brush) == CK_ACTOR) ? ed.brush : 0;
-                if (ghost && span_actor(ghost) && ed.dragging && !ed.moving) {   /* a conveyor / walkway being dragged */
+                uint16_t ghost = (ed.tool == T_PENCIL && cell_kind(ed.brush) == CK_ACTOR) ? ed.brush : 0;
+                if (ghost && span_actor(ghost) && ed.dragging) {   /* a conveyor / walkway being dragged */
                     int a0 = std::min(ed.drag_c, mc), a1 = std::max(ed.drag_c, mc);
                     if (a1 == a0) a1 = a0 + 1;
                     ImVec2 s0 = cell_pos(a0, ed.drag_r), s1 = cell_pos(a1 + 1, ed.drag_r + 1);
@@ -3250,10 +3283,22 @@ static void status_bar(float y0, float w, float h)
         float zw = ImGui::GetFrameHeight() * 2 + ImGui::CalcTextSize("1000%").x + 8 * ui_scale;
         const char *chk = ICON_TASK_ALT " Check (F7)";
         float cw0 = ImGui::CalcTextSize(chk).x + ImGui::GetStyle().FramePadding.x * 2;
-        right_w = bw + zw + cw0 + 32 * ui_scale;
+        const char *path_lbl = ICON_VISIBILITY " Play-test path";
+        float pw = trail.size() > 1 ? ImGui::CalcTextSize(path_lbl).x + ImGui::GetStyle().FramePadding.x * 2 + 14 * ui_scale : 0;
+        right_w = bw + zw + cw0 + pw + 32 * ui_scale;
         float x = w - 10 * ui_scale - right_w;
         ImGui::SetCursorPos(ImVec2(x, fy));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2 * ui_scale, 0));
+        if (pw > 0) {                           /* Duke's path from the last play-test: show or hide it */
+            ImGui::PushStyleColor(ImGuiCol_Text, view.trail ? IM_COL32(255, 140, 60, 255) : ImGui::GetColorU32(T.muted));
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            if (ImGui::Button(path_lbl)) view.trail = !view.trail;
+            ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip(view.trail ? "Hide Duke's path from the last play-test (View > Play-test path)" : "Show Duke's path from the last play-test");
+            ImGui::SameLine(0, 14 * ui_scale);
+            ImGui::SetCursorPosY(fy);
+        }
         int zi = zoom_index();
         if (icon_button(ICON_ZOOM_OUT, "Zoom out (wheel)", false, zi > 0)) zoom_at(ZOOMS[zi - 1], ImVec2(last_canvas.x / 2, last_canvas.y / 2));
         ImGui::SameLine();
@@ -3659,6 +3704,7 @@ static void run_play(void)
     ImGui::GetIO().ClearInputMouse();
 
     trail.clear();
+    view.trail = true;                          /* (a new play-test: its path shows) */
     for (int i = 0; i < res.trail_n; i++) {     /* one point per place: standing still adds nothing */
         ImVec2 t(res.trail[i * 2], res.trail[i * 2 + 1]);
         if (trail.empty() || t.x != trail.back().x || t.y != trail.back().y) trail.push_back(t);
