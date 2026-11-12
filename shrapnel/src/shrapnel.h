@@ -21,13 +21,18 @@ extern const char *shrapnel_game_dir;
 
 const int MAP_W = 128, MAP_H = 90;              /* cells */
 const int LEVEL_PX_W = MAP_W * 16, LEVEL_PX_H = MAP_H * 16;
-const int N_ACTORS = ED_ACTOR_END - 0x3000;     /* 3000h..305Dh (305Ah.. Techbot's loose items) */
-/* a loose item (Techbot) as the boxed one it is a variant of; anything else as it is */
+const int N_ACTORS = ED_ACTOR_END - 0x3000;     /* 3000h..3065h (305Ah.. Techbot's own) */
+/* a Techbot variant as the actor it is a variant of - a loose item as the
+ * boxed one, a see-through actor with its backdrop stated as the plain one;
+ * anything else as it is */
 inline uint16_t item_base(uint16_t v)
 {
     static const uint16_t b[4] = { 0x3006, 0x3008, 0x3020, 0x3033 };
-    return v >= ED_LOOSE_FIRST && v < ED_ACTOR_END ? b[v - ED_LOOSE_FIRST] : v;
+    if (v >= ED_SEE_A && v < ED_SEE_A + 8) return (uint16_t)ed_see_base(v);
+    return v >= ED_LOOSE_FIRST && v < ED_SEE_A ? b[v - ED_LOOSE_FIRST] : v;
 }
+/* a see-through actor (plain or stated) with backdrop `bd` (0 or 20h) stated behind it */
+inline uint16_t see_with(uint16_t v, uint16_t bd) { return (uint16_t)((bd ? ED_SEE_B : ED_SEE_A) + ed_see_index(v)); }
 const double GAME_FPS = 1193182.0 / 8273.0 / 9.0;   /* one frame = 9 PIT ticks at 144 Hz */
 
 /* ---- cells */
@@ -97,6 +102,7 @@ bool level_changed(const Episode &ep, Level &lv, int &c0, int &r0, int &c1, int 
 /* ---- editing (tools.cpp): operations on a map, independent of the UI */
 enum LockBits { LOCK_SOLID = 1, LOCK_BACKGROUND = 2, LOCK_BACKDROP = 4, LOCK_ACTORS = 8 };
 bool cell_locked(uint16_t v, int locks);        /* is a cell holding v protected by these locks? */
+extern bool edit_see_variants;                 /* Techbot projects: backdrops painted on see-through actors state them */
 struct Edit {                                   /* one change in progress */
     uint16_t *map;
     int locks;

@@ -94,7 +94,7 @@ static void map_to_override(const uint16_t *map, uint8_t *b)
 int ed_actor_limit(uint16_t id, int *cap)
 {
     int t = 0, n = 0;
-    switch (id) {
+    switch (ed_see_base(id)) {                 /* (a stated see-through actor counts as its plain one) */
     case 0x3000: t = 1;  n = NA(greyboxes); break;
     case 0x3001: t = 2;  n = NA(elevators); break;
     case 0x3002: case 0x3004: t = 3; n = NA(conveyors); break;

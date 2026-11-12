@@ -129,8 +129,16 @@ void port_restart(void);
 #define ED_MAP_CELLS 0x2D00              /* 128 x 90 */
 #define ED_BD_W 208                      /* backdrop: 13 x 10 tiles */
 #define ED_BD_H 160
-#define ED_ACTOR_END 0x305E              /* actors: 3000h..305Dh (305Ah.. Techbot's loose items) */
+#define ED_ACTOR_END 0x3066              /* actors: 3000h..3065h (305Ah.. Techbot's own) */
 #define ED_LOOSE_FIRST 0x305A            /* loose boots, claws, robot hand, access card */
+/* (Techbot) the see-through actors - window with bars, chain-link fence,
+ * three-panel window left and right - with the backdrop behind them stated:
+ * 305Eh..3061h backdrop A, 3062h..3065h backdrop B (the plain ones follow
+ * their neighbours in Techbot, and show A in the DOS game) */
+#define ED_SEE_A 0x305E
+#define ED_SEE_B 0x3062
+int ed_see_base(int id);                 /* a stated see-through actor as the plain one; else id */
+int ed_see_index(int id);                /* 0..3 for a see-through actor (plain or stated), else -1 */
 #define ED_LOOK_DUKE 0x10000             /* ed_actor_look: keep Duke's own pieces too */
 typedef struct {
     const uint8_t *src;                  /* a 16x16 masked sprite, or NULL: a tile */

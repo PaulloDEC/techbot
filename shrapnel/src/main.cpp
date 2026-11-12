@@ -720,6 +720,7 @@ static void apply_drops(int i)
 {
     memset(port_drop, 0, sizeof port_drop);
     port_techbot_rules = !proj.dos;             /* (see-through actors over backdrop B: game.c) */
+    edit_see_variants = !proj.dos;
     if (proj.dos || i < 0 || i >= (int)proj.entries.size()) return;
     int l = i;
     while (l > 0 && proj.entries[l].hallway) l--;

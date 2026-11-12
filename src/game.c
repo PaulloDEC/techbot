@@ -58,6 +58,15 @@ void save_game(uint8_t slot);             /* 0097:0151 */
  * Shrapnel) the cell shows the backdrop most of its neighbours show, so one
  * placed over backdrop B shows B.  Stock and DOS levels: A, as ever. */
 int port_techbot_rules;
+static const int see_ids[4] = { 0x3028, 0x303D, 0x303E, 0x303F };
+int ed_see_index(int id)
+{
+    int k;
+    if (id >= ED_SEE_A && id < ED_SEE_A + 8) return (id - ED_SEE_A) & 3;
+    for (k = 0; k < 4; k++) if (id == see_ids[k]) return k;
+    return -1;
+}
+int ed_see_base(int id) { return id >= ED_SEE_A && id < ED_SEE_A + 8 ? see_ids[(id - ED_SEE_A) & 3] : id; }
 static uint16_t see_through_backdrop(uint16_t o)
 {
     static const int16_t nb[4] = { -2, 2, -0x100, 0x100 };
@@ -87,7 +96,7 @@ void spawn_level_actors(int rows)
 #define BELOW()  (MAP16(o) = MAP16(o + 0x100))
 #define OBJ6(a, n, S)       do { a[n].s = (S); a[n].x = X; a[n].y = Y; } while (0)
 #define OBJ8(a, n, S, T)    do { a[n].s = (S); a[n].x = X; a[n].y = Y; a[n].t = (T); } while (0)
-            if (id < 0x3000 || id - 0x3000 > 0x5D) continue;   /* (port: 305Ah..305Dh are Techbot's) */
+            if (id < 0x3000 || id >= ED_ACTOR_END) continue;   /* (port: 305Ah.. are Techbot's) */
             switch (id - 0x3000) {
             case 0x00: OBJ6(greyboxes, n_greybox, 1); register_actor(act_greyboxes); LEFT(); n_greybox++; break;
             case 0x01:
@@ -224,6 +233,11 @@ void spawn_level_actors(int rows)
             case 0x3C: OBJ6(firemonsters, n_firemonsters, 1); n_firemonsters++; register_actor(act_firemonsters); LEFT(); break;
             case 0x3D: case 0x3E: case 0x3F:
                 OBJ6(decor, n_decor, (id - 0x303D) * 0xA0 + 0x9D80); n_decor++; MAP16(o) = see_through_backdrop(o); break;
+            case 0x5E: case 0x62:                /* (port) the window with bars, its backdrop stated */
+                OBJ6(decor, n_decor, 0x80C0); n_decor++; MAP16(o) = id >= ED_SEE_B ? 0x20 : 0; break;
+            case 0x5F: case 0x60: case 0x61: case 0x63: case 0x64: case 0x65:   /* (port) fence, three-panel window */
+                OBJ6(decor, n_decor, (ed_see_base(id) - 0x303D) * 0xA0 + 0x9D80); n_decor++;
+                MAP16(o) = id >= ED_SEE_B ? 0x20 : 0; break;
             case 0x40: monitor_present = 1; monitor_x = X; monitor_y = Y; LEFT(); break;
             case 0x41: protonscreen_present = 1; protonscreen_state = 0; protonscreen_x = X; protonscreen_y = Y; LEFT(); break;
             case 0x42: case 0x43:

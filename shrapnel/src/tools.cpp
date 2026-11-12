@@ -60,10 +60,25 @@ void Edit::finish_behind()
     behind = keep;
 }
 
+bool edit_see_variants;
+
 bool Edit::set(int c, int r, uint16_t v)
 {
     if (c < 0 || r < 0 || c >= MAP_W || r >= MAP_H) return false;
     uint16_t &cell = map[r * MAP_W + c];
+    /* (Techbot) a backdrop painted on a see-through actor - one the brush
+     * goes behind, or one protected from being painted over - becomes the
+     * backdrop it shows through: the actor's stated variant (game.c) */
+    if (edit_see_variants && (v == 0 || v == 0x20) && ed_see_index(cell) >= 0 && (behind || cell_locked(cell, locks)) &&
+        !(locks & LOCK_BACKDROP)) {
+        uint16_t w = see_with(cell, v);
+        if (w == cell) return false;
+        cell = w;
+        changed++;
+        c0 = std::min(c0, c); r0 = std::min(r0, r);
+        c1 = std::max(c1, c); r1 = std::max(r1, r);
+        return true;
+    }
     if (behind && cell_kind(cell) == CK_ACTOR && behind_tile(v)) {   /* behind the actor, not over it */
         if (!cell_locked(cell, locks)) backs.push_back({ r * MAP_W + c, v });
         return false;

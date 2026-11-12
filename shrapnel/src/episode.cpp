@@ -128,6 +128,14 @@ static const char *const names[N_ACTORS] = {
     "Grappling claws (loose)",       /* 305B */
     "Robot hand (loose)",            /* 305C */
     "Access card (loose)",           /* 305D */
+    "Window with Bars, backdrop A",  /* 305E: Techbot only - the see-through actors, */
+    "Chain-Link Fence, backdrop A",  /* 305F    their backdrop painted (A, then B) */
+    "Three-Panel Window, Left, backdrop A",  /* 3060 */
+    "Three-Panel Window, Right, backdrop A", /* 3061 */
+    "Window with Bars, backdrop B",  /* 3062 */
+    "Chain-Link Fence, backdrop B",  /* 3063 */
+    "Three-Panel Window, Left, backdrop B",  /* 3064 */
+    "Three-Panel Window, Right, backdrop B", /* 3065 */
 };
 
 bool actor_crate(uint16_t id)

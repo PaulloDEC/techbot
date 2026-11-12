@@ -632,8 +632,13 @@ Shrapnel closed with a new project unsaved, the start screen offers it back.
     protect the walls, background and actors to change only the open space.
     The sidebar counts the cells showing each.  The see-through actors (the
     window with bars, the chain-link fence and the three-panel window) show
-    the backdrop most of their neighbours show; in a DOS episode, as in the
-    original, always A.
+    the backdrop most of their neighbours show, unless you paint one behind
+    them: a backdrop painted on one - with a brush that goes behind actors
+    (Pencil, Line, Rectangle), or with actors protected - is the one it
+    shows, whatever is around it (in the file it becomes a Techbot-only
+    variant of the actor, 305Eh-3065h: backdrop A, then B).  In a DOS
+    episode, as in the original, they always show A (the Checks note it when
+    one sits over B).
     Click a picture to pick from every backdrop in the game folder,
     all three episodes, each picture once (the open episode's file first, so
     it needs no other episode); or **a picture of your own** - any PNG, made

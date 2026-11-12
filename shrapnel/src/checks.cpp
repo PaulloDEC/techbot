@@ -28,6 +28,8 @@ Fill actor_fill(uint16_t id, uint16_t *set)
     case 0x3002: *set = 0x1820; return F_SET;                       /* conveyor (left) start */
     case 0x3019: *set = 0x21A0; return F_SET;                       /* bridge */
     case 0x3028: case 0x303D: case 0x303E: case 0x303F: *set = 0; return F_SET;
+    case 0x305E: case 0x305F: case 0x3060: case 0x3061: *set = 0; return F_SET;        /* (Techbot) backdrop stated */
+    case 0x3062: case 0x3063: case 0x3064: case 0x3065: *set = 0x20; return F_SET;
     case 0x304C: case 0x304D: case 0x304E: case 0x304F: *set = 0x1820; return F_SET;   /* key doors */
     case 0x3036: *set = 0x2FE0; return F_SET;                       /* walkway */
     case 0x3003: case 0x3004: case 0x3005: return F_KEEP;           /* drawn over by the belt */
@@ -117,11 +119,37 @@ void run_checks(const Episode &ep, const uint16_t *m, const CheckContext &cx, st
                 "The game would draw whatever memory lies at that offset.");
 
     if (cx.dos)
-        for (int i = 0; i < ED_MAP_CELLS; i++)
-            if (m[i] >= ED_LOOSE_FIRST && m[i] < ED_ACTOR_END)
+        for (int i = 0; i < ED_MAP_CELLS; i++) {
+            if (m[i] >= ED_LOOSE_FIRST && m[i] < ED_SEE_A)
                 add(CS_BROKEN, i, nm(m[i]) + ": Techbot only",
                     "The DOS game can only start the boots, claws, robot hand and access card in a crate; it would draw "
                     "this cell as junk. Use the crate (it is shot open to get the item).", item_base(m[i]));
+            else if (m[i] >= ED_SEE_A && m[i] < ED_ACTOR_END)
+                add(CS_BROKEN, i, nm(m[i]) + ": Techbot only",
+                    "The DOS game can't be told which backdrop is behind it (it always shows A); it would draw this "
+                    "cell as junk. Use the plain one.", item_base(m[i]));
+        }
+
+    if (cx.dos) {   /* see-through actors over backdrop B: the DOS game puts A behind them (game.c) */
+        int first = -1, n = 0;
+        for (int i = 0; i < ED_MAP_CELLS; i++) {
+            uint16_t v = m[i];
+            if (v != 0x3028 && (v < 0x303D || v > 0x303F)) continue;   /* (stated ones: Techbot only, above) */
+            int c = i % MAP_W, r = i / MAP_W, a = 0, b = 0;
+            const int nb[4][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+            for (const auto &d : nb) {
+                int cc = c + d[0], rr = r + d[1];
+                if (cc < 0 || rr < 0 || cc >= MAP_W || rr >= MAP_H) continue;
+                uint16_t w = m[rr * MAP_W + cc];
+                if (w == 0) a++; else if (w == 0x20) b++;
+            }
+            if (b > a) { if (first < 0) first = i; n++; }
+        }
+        if (n)
+            add(CS_NOTE, first, n == 1 ? "A see-through actor over backdrop B shows A" : std::to_string(n) + " see-through actors over backdrop B show A",
+                "The window with bars, the chain-link fence and the three-panel window always have backdrop A behind them "
+                "in the DOS game, whatever is around them. In a Techbot episode they show the backdrop around them.");
+    }
 
     const std::vector<int> &starts = all(0x3032);
     if (starts.empty())
@@ -333,7 +361,7 @@ void run_checks(const Episode &ep, const uint16_t *m, const CheckContext &cx, st
         /* the cell the loader copies in, when that is a wall or another actor's tile */
         uint16_t set = 0;
         Fill f = actor_fill(v, &set);
-        bool embedded = v == 0x3014 || v == 0x302A || (v >= 0x3025 && v <= 0x3028);   /* made to sit in walls */
+        bool embedded = v == 0x3014 || v == 0x302A || (item_base(v) >= 0x3025 && item_base(v) <= 0x3028);   /* made to sit in walls */
         if (f <= F_BELOW && !embedded) {
             int nc = c + (f == F_LEFT ? -1 : f == F_RIGHT ? 1 : 0), nr = r + (f == F_ABOVE ? -1 : f == F_BELOW ? 1 : 0);
             uint16_t got = a[i];
