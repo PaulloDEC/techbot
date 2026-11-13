@@ -50,6 +50,7 @@ bool        actor_crate(uint16_t id);           /* a crate with something inside
 /* ---- an episode's graphics and actor looks */
 struct Piece {
     int dx, dy;                                 /* pixels from the actor's cell */
+    uint16_t tile = 0;                          /* drawn from this map tile (0: from a sprite) */
     uint8_t px[256];                            /* palette index, 255 = see-through */
 };
 struct ActorLook {

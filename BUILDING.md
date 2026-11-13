@@ -575,9 +575,50 @@ the 16x16 `shrapnel.png` at 16-256 px, pixel-sharp).
 
 ### The start screen
 
-Shrapnel opens on a start screen: the game folder (change it there if it
-has no `DN1.EXE`, `DN2.EXE` or `DN3.EXE`), two groups of choices, and the
-projects you opened recently.
+Shrapnel opens on a start screen: the game folder, two groups of choices,
+and the projects you opened recently - in the middle of the window when they
+fit (no scrollbar), from the top with a scrollbar when they don't.  When the game folder is fine it just
+says so (which episodes were found, and the folder's full path), with
+**Change folder...**; when it has no `DN1.EXE`, `DN2.EXE` or `DN3.EXE` (or
+while changing it) it asks for one - type or paste a path, or Browse.  A new
+folder that doesn't do keeps the one that did.
+
+The line under the logo (at the logo's pixel size) and the headings (Game
+folder, the two kinds of project, Recent; at twice that) are written in the
+game's own font, read from `FONT1.DN1` and `FONT2.DN1` in the game folder
+(nothing of it is shipped), with the game's shadow.  Until a game folder is
+chosen they are in the interface font.  (`pixel_text()` in main.cpp, for any
+other such touches.)  The recent list shows what each project is (a Techbot
+level or episode, or a DOS episode folder); hover one for its full path.
+
+Behind the start screen, the episode's own tiles move very faintly (View >
+Start screen background): **Levels building themselves** (a piece of a stock
+level, from any episode in the folder, fades on a tile at a time from the
+bottom left to the top right in about 3.5 seconds, stands for 9, then fades off
+the same way in 3, drifting slowly in a random direction all the while; cells
+that show the backdrop in the game are black tiles; actors are drawn as the
+editor shows them, over what the game's loader leaves in their cells - worked
+out by the editor's own loader the first time a level is shown) or **Tile rain** (tiles
+from a stock level fall down the columns and pile up; a pile that gets high
+lets its bottom tile go), or **None**.  The piece is always all level, for the
+whole window and the whole drift: never the map's edge, the outer wall or the
+empty space outside a level, and walls in every ninth of it.  Game pixels are
+as big as the window's height suits (2x below about 1260 screen pixels high,
+3x from there - a 1440p screen, maximised - 4x from 1680, 5x from 2100), greyed and laid over the page colour as an
+Overlay blend would, at a quarter strength (the page is one flat colour, so
+this is worked out per pixel beforehand: SDL has no Overlay mode); animated
+tiles stand still.  The drift is smooth: the tiles are drawn crisp on a
+whole-pixel grid into a texture, which is drawn at the leftover fraction of a
+pixel with smoothing.  The tiles and levels come straight from each episode's
+files (`BACK0-3`, `SOLID0-3`, the `WORLDAL` maps), read once per game folder
+in a few milliseconds - no episode is loaded into the editor for it.  It
+stands still when Animate is off and pauses while Shrapnel isn't the focused
+window.  For tests, `SHRAPNEL_BG_TIME=<seconds>` starts its clock there and
+steps it 1/60 s a frame, `SHRAPNEL_SHOT_EVERY=<n>` with `--shot <prefix>`
+saves every nth frame before `--shot-at` as `<prefix>_NNNNN.bmp`, and
+`SHRAPNEL_WINDOW=<w>x<h>` opens the window at that size, and
+`SHRAPNEL_BG_CHECK=1` compares the tiles as read with the editor's own for
+each episode (stderr).
 
 **Techbot Compatible** - plays in Techbot.  An episode can have any number of
 levels (up to 99), each hallway its own map.
@@ -891,6 +932,21 @@ shown.
 **Open the example level** on the start screen opens a small finished level
 (by PaulloDEC; `shrapnel/resources/example.lev`) as a new project: play it,
 take it apart, and Save asks where to keep your copy.
+
+### The tour and the Help menu
+
+The first time a project is opened, a ten-step tour points out the parts of
+the window one at a time: the map, the palette, the tools, Protect, the levels
+and backdrops, Play, Checks, Reach and saving.  The rest of the window is
+dimmed and the part being explained is outlined; Next (Right arrow or Enter),
+Back (Left arrow) and Skip (Esc) move through it, and the keys it mentions are
+the current ones (Edit > Keyboard shortcuts).  It starts by itself only once
+(`tour_seen = 1` in settings.txt).
+
+**Help** has Take the tour (with a project open), Keyboard shortcuts…, The
+guide (this file, when it is beside Shrapnel or a folder or two up) and About
+Shrapnel (the version, and the libraries and fonts it is made with and their
+licences).
 
 ### A catalog of tiles and actors
 

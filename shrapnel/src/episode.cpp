@@ -194,7 +194,7 @@ bool Episode::load(int ep)
             p.dx = raw[k].dx;
             p.dy = raw[k].dy;
             if (raw[k].src) ed_sprite(raw[k].src, p.px);
-            else ed_tile(raw[k].tile, p.px);
+            else { ed_tile(raw[k].tile, p.px); p.tile = raw[k].tile; }
             l.pieces.push_back(p);
         }
         l.contents.clear();                     /* crates: shoot one and see what the game draws */

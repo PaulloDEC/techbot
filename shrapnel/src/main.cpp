@@ -330,6 +330,26 @@ static bool prompt_settings;                /* File > Project settings */
 static bool panels_hidden;
 static bool keys_open;                      /* Edit > Keyboard shortcuts */
 static bool prompt_prefab;                  /* Edit > Save selection as prefab */
+/* ---- the first-run tour: the parts of the window it points at, as drawn this frame */
+enum TourSpot { TS_MAP, TS_PALETTE, TS_TOOLS, TS_PROTECT, TS_LEVELS, TS_PLAY, TS_CHECK, TS_REACH, TS_FILE, N_SPOTS };
+static ImVec2 spot0[N_SPOTS], spot1[N_SPOTS];   /* (min, max; empty = not on screen) */
+static void spot(TourSpot k, ImVec2 a, ImVec2 b) { spot0[k] = a; spot1[k] = b; }
+static void spot_join(TourSpot k, ImVec2 a, ImVec2 b)
+{
+    if (spot1[k].x <= spot0[k].x) { spot(k, a, b); return; }
+    spot0[k] = ImVec2(std::min(spot0[k].x, a.x), std::min(spot0[k].y, a.y));
+    spot1[k] = ImVec2(std::max(spot1[k].x, b.x), std::max(spot1[k].y, b.y));
+}
+static int tour_step = -1;                  /* -1: no tour */
+static bool tour_seen;                      /* (settings.txt: it starts by itself only once) */
+static bool prompt_about;                   /* Help > About */
+enum { BG_BUILD, BG_RAIN, BG_OFF };
+static int start_bg = BG_BUILD;             /* View > Start screen background (settings.txt: start_bg) */
+static bool app_focused = true;
+static void sbg_reset(void);
+#define SHRAPNEL_VERSION "0.5.0"
+static void tour_start(void);
+static std::string guide_path(void);
 static bool prefab_take[4] = { true, true, true, true };   /* what a prefab takes: walls, background, backdrop cells, actors */                  /* Tab: the side panels hidden, the map wider */
 static bool note_win;                       /* the level's message, in its own window */
 static inline bool shows_message(uint16_t v) { return v == 0x3040 || v == 0x3041; }   /* note monitor, Dr. Proton screen */
@@ -575,6 +595,8 @@ static void settings_save(void)
     fprintf(f, "sidebar = %d\npalette = %d\ndrawer = %d\n", (int)side_w, (int)right_w, (int)drawer_hu);
     fprintf(f, "ui_size = %d\n", (int)(ui_user * 100 + 0.5f));
     fprintf(f, "high_contrast = %d\ncolour_safe = %d\nanimate = %d\n", theme_hc, theme_cb, view.animate);
+    fprintf(f, "tour_seen = %d\n", tour_seen);
+    fprintf(f, "start_bg = %s\n", start_bg == BG_RAIN ? "rain" : start_bg == BG_OFF ? "off" : "build");
     keys_save(f);
     fclose(f);
 }
@@ -594,6 +616,8 @@ static void settings_load(void)
         else if (!strncmp(b, "high_contrast", 13) && strchr(b, '=')) theme_hc = atoi(strchr(b, '=') + 1) != 0;
         else if (!strncmp(b, "colour_safe", 11) && strchr(b, '=')) theme_cb = atoi(strchr(b, '=') + 1) != 0;
         else if (!strncmp(b, "animate", 7) && strchr(b, '=')) view.animate = atoi(strchr(b, '=') + 1) != 0;
+        else if (!strncmp(b, "start_bg", 8)) start_bg = strstr(b, "rain") ? BG_RAIN : strstr(b, "off") ? BG_OFF : BG_BUILD;
+        else if (!strncmp(b, "tour_seen", 9) && strchr(b, '=')) tour_seen = atoi(strchr(b, '=') + 1) != 0;
         else keys_load(b);                          /* key.<action> = ... */
     fclose(f);
 }
@@ -1040,7 +1064,37 @@ static void draw_prompts(void)
         prompt_prefab = false;
         snprintf(prefab_name, sizeof prefab_name, "%s", "");
     }
+    if (prompt_about) { ImGui::OpenPopup("About Shrapnel"); prompt_about = false; }
     ImVec2 c = ImGui::GetMainViewport()->GetCenter();
+
+    ImGui::SetNextWindowPos(c, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(460 * ui_scale, 0));
+    if (ImGui::BeginPopupModal("About Shrapnel", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::PushFont(font_bold);
+        ImGui::SetWindowFontScale(1.3f);
+        ImGui::TextUnformatted("Shrapnel " SHRAPNEL_VERSION);
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopFont();
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextUnformatted("The level editor for Techbot, the enhanced PC port of Duke Nukem 1. "
+                               "Make levels and episodes for Techbot, or map files for the original DOS game.");
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+        ImGui::TextUnformatted("Shrapnel contains nothing of the game itself: everything it shows is read from your own game files.");
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+        ImGui::SeparatorText("Made with");
+        ImGui::BulletText("SDL2 - zlib licence");
+        ImGui::BulletText("Dear ImGui - MIT licence");
+        ImGui::BulletText("miniz - MIT licence");
+        ImGui::BulletText("stb_image - public domain (MIT alternative)");
+        ImGui::BulletText("Inter, by The Inter Project Authors - SIL Open Font Licence 1.1");
+        ImGui::BulletText("Material Symbols, by Google - Apache Licence 2.0");
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        if (ImGui::Button("Close", ImVec2(110 * ui_scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 
     ImGui::SetNextWindowPos(c, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(420 * ui_scale, 0));
@@ -1196,7 +1250,9 @@ static void draw_prompts(void)
 static void menu_bar(void)
 {
     if (!ImGui::BeginMainMenuBar()) return;
-    if (ImGui::BeginMenu("File")) {
+    bool file_open = ImGui::BeginMenu("File");
+    spot(TS_FILE, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    if (file_open) {
         if (ImGui::MenuItem("Start screen...", NULL, false, editing())) guard_changes([] { close_project(); });
         if (ImGui::MenuItem("Open project (.LEV, .EPI)...", act_keys(A_OPEN).c_str(), false, ep.number != 0)) guard_changes([] { open_project_dialog(); });
         if (ImGui::MenuItem("Open DOS episode folder...", NULL, false, ep.number != 0))
@@ -1279,6 +1335,12 @@ static void menu_bar(void)
             ImGui::TextDisabled("Interface size and theme: below");
             ImGui::EndMenu();
         }
+        if (ImGui::BeginMenu("Start screen background")) {
+            static const char *const names[] = { "Levels building themselves", "Tile rain", "None" };
+            for (int k = 0; k < 3; k++)
+                if (ImGui::MenuItem(names[k], NULL, start_bg == k)) { start_bg = k; sbg_reset(); settings_save(); }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("Theme")) {
             if (ImGui::MenuItem(ICON_DARK_MODE "  Dark", NULL, theme_dark)) { theme_dark = true; theme_apply(ui_scale); settings_save(); }
             if (ImGui::MenuItem(ICON_LIGHT_MODE "  Light", NULL, !theme_dark)) { theme_dark = false; theme_apply(ui_scale); settings_save(); }
@@ -1307,6 +1369,21 @@ static void menu_bar(void)
         }
         ImGui::EndMenu();
     }
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Take the tour", NULL, false, editing())) tour_start();
+        if (!editing() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Open a project first (the example level is a good one)");
+        if (ImGui::MenuItem("Keyboard shortcuts...")) keys_open = true;
+        std::string g = guide_path();
+        if (ImGui::MenuItem("The guide (BUILDING.md)", NULL, false, !g.empty())) {
+            std::string u = "file:///" + g;
+            for (char &ch : u) if (ch == '\\') ch = '/';
+            SDL_OpenURL(u.c_str());
+        }
+        if (g.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("BUILDING.md isn't beside Shrapnel");
+        ImGui::Separator();
+        if (ImGui::MenuItem("About Shrapnel...")) prompt_about = true;
+        ImGui::EndMenu();
+    }
     ImGui::EndMainMenuBar();
 }
 
@@ -1314,7 +1391,7 @@ static void shortcuts(void)
 {
     ImGuiIO &io = ImGui::GetIO();
     if (io.WantTextInput || keys_capturing() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
-    if (!editing()) return;
+    if (!editing() || tour_step >= 0) return;
     /* (Edit > Keyboard shortcuts changes these: keys.cpp) */
     if (act_pressed(A_CHECK)) run_check();
     if (act_pressed(A_PLAY_HERE)) { play_req.pending = true; play_req.from_start = false; }
@@ -1546,6 +1623,7 @@ static void sidebar(float y0, float w, float h)
         float list_h = std::max(ImGui::GetFrameHeight() * 4, std::min((float)proj.entries.size() * ImGui::GetTextLineHeightWithSpacing() + 10 * ui_scale,
                                                                       (h - mini_h) * 0.42f));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, T.panel2);
+        ImVec2 levels_top = ImGui::GetCursorScreenPos();
         ImGui::BeginChild("##levels", ImVec2(0, list_h), ImGuiChildFlags_Borders);
         ImGui::PopStyleColor();
         for (int i = 0; i < (int)proj.entries.size(); i++) {
@@ -1612,6 +1690,7 @@ static void sidebar(float y0, float w, float h)
         level_props();
         props_need = ImGui::GetCursorPosY() + 4 * ui_scale;
         ImGui::EndChild();
+        spot(TS_LEVELS, levels_top, ImGui::GetItemRectMax());
 
         ImGui::Spacing();
         section_label("OVERVIEW");
@@ -2708,6 +2787,7 @@ static void right_panel(float x0, float y0, float w, float h)
     ImGui::SetNextWindowSize(ImVec2(w, h));
     ImGui::Begin("##right", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+    spot(TS_PALETTE, ImVec2(x0, y0), ImVec2(x0 + w, y0 + h));
     if (!editing()) { ImGui::End(); return; }
     static int side_aid = getenv("SHRAPNEL_TAB") && !strcmp(getenv("SHRAPNEL_TAB"), "Actors") ? 1 : 0;   /* (test aid: screenshots) */
     if (side_aid) { pal_side = 1; side_aid = 0; }
@@ -2863,6 +2943,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, text_pad);
         std::string ph = "Play from the middle of the view (" + act_keys(A_PLAY_HERE) + ": from the cell under the mouse). F4 comes back.";
         std::string ps = "Play from the player start (" + act_keys(A_PLAY_START) + "); reaching the end records a clear.";
+        ImVec2 play0 = ImGui::GetCursorScreenPos();
         if (split_button("Play here", ICON_PLAY_ARROW_FILLED, "##playmenu", ph.c_str(),
                          tb_large ? font_tb_bold : NULL))
             { play_req.pending = true; play_req.from_start = false; }
@@ -2874,6 +2955,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", ps.c_str());
         }
         if (go) { play_req.pending = true; play_req.from_start = true; }
+        spot(TS_PLAY, play0, ImGui::GetItemRectMax());
         ImGui::PopStyleVar();
         ImGui::SetNextWindowSize(ImVec2(330 * ui_scale, 0));
         if (ImGui::BeginPopup("##playmenu")) {
@@ -2893,6 +2975,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
         char tip[200];
         snprintf(tip, sizeof tip, "%s (%s)\n%s", tool_info[t].name, act_keys((Act)(A_TOOL_SELECT + t)).c_str(), tool_info[t].help);
         if (tb_icon(tool_icon[t], tip, ed.tool == t, true, t ? near : gap0)) { ed.tool = (Tool)t; ed.floating = false; }
+        spot_join(TS_TOOLS, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     }
     if (tb_large) ImGui::PushFont(font_body);       /* (chips at the usual size) */
     if (ed.tool == T_RECT && tb_chip("Filled", ed.rect_filled, apart)) ed.rect_filled = !ed.rect_filled;
@@ -2904,6 +2987,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
     toolbar_sep();
     if (tb_icon(ICON_UNDO, "Undo (Ctrl+Z)", false, hist.cur > 0, apart)) do_undo();
     if (tb_icon(ICON_REDO, "Redo (Ctrl+Y)", false, hist.cur + 1 < (int)hist.steps.size(), near)) do_redo();
+    spot_join(TS_TOOLS, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     toolbar_sep();
     if (tb_icon(ICON_GRID_4X4, "Grid (Ctrl+G)", view.grid, true, apart)) view.grid = !view.grid;
     if (tb_icon(ICON_PERSON, "Actors", view.actors, true, near)) { view.actors = !view.actors; redraw_all(); }
@@ -2912,6 +2996,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
     if (tb_icon(ICON_ROUTE, "Reach (Ctrl+R): where Duke can get to (green), where he gets stuck (red), one way to the end",
                 show_reach, true, near))
         show_reach = !show_reach;
+    spot(TS_REACH, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     /* what painting, filling, pasting and moving leave alone: over the palette */
     float pgap = apart;
     if (tb_large) {
@@ -2922,6 +3007,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
     {
         tb_place(ImGui::GetFontSize() * 0.8f + (tb_large ? 22 : 11) * ui_scale, pgap);   /* (capitals sit low in the line: lift them) */
         section_label("PROTECT");
+        spot_join(TS_PROTECT, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
         static const char *const icons[4] = { ICON_BRICK, ICON_TEXTURE, ICON_LANDSCAPE, ICON_PERSON };
         static const char *const tips[4] = { "Protect the walls (solid tiles)", "Protect the background tiles",
                                              "Protect the backdrop cells", "Protect the actors" };
@@ -2931,6 +3017,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
             char t[96];
             snprintf(t, sizeof t, "%s%s", tips[k], on ? " (on)" : "");
             if (tb_icon(icons[k], t, on, true, k ? near : 8 * ui_scale)) ed.locks ^= 1 << k;
+            spot_join(TS_PROTECT, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
             ImGui::PopID();
             if (on) {                           /* a padlock on its corner */
                 ImVec2 r = ImGui::GetItemRectMax();
@@ -3256,6 +3343,7 @@ static void canvas(float x0, float y0, float w, float h)
     /* the drawer: as tall as it was dragged, leaving the map at least a strip */
     float drawer_h = drawer_open && editing() ? std::max(100 * ui_scale, std::min(drawer_hu * ui_scale, h - 120 * ui_scale)) : 0;
     ImVec2 size(w, h - drawer_h);
+    spot(TS_MAP, p, ImVec2(p.x + size.x, p.y + size.y));
     ImGui::SetCursorScreenPos(p);
     last_canvas = size;
     if (pending_at_c >= 0) { center_on(pending_at_c * 16 + 8, pending_at_r * 16 + 8, size); pending_at_c = -1; }
@@ -3280,7 +3368,7 @@ static void canvas(float x0, float y0, float w, float h)
             if (zi >= 0 && zi < N_ZOOMS) zoom_at(ZOOMS[zi], ImVec2(io.MousePos.x - p.x, io.MousePos.y - p.y));
         }
         int n0, m0, n1, m1;
-        bool keys_ok = !io.WantTextInput && !keys_capturing() &&
+        bool keys_ok = !io.WantTextInput && !keys_capturing() && tour_step < 0 &&
                        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (keys_ok && ed.tool == T_MOVE && !ed.dragging && sel.any && sel.bounds(n0, m0, n1, m1)) {
             /* the Move tool and a selection: the pan keys nudge it a cell (Shift: four) */
@@ -3565,6 +3653,143 @@ static void splitter(const char *id, float x, float y, float h, float *width, in
     ImGui::End();
 }
 
+/* ---- the first-run tour: read and click Next */
+struct TourCard { int spot; const char *title; std::string (*text)(void); };
+static std::string tk(Act a) { std::string k = act_keys(a); return k.empty() ? "(no key)" : k; }
+static const TourCard tour_cards[] = {
+    { -1, "Welcome to Shrapnel", [] { return std::string(
+        "A quick look around, in ten short steps. Next (or the right arrow) moves on, Back goes back, "
+        "Skip (or Esc) ends it. Help > Take the tour shows it again any time."); } },
+    { TS_MAP, "The map", [] { return std::string(
+        "The level, drawn by the game itself. The wheel zooms (" + tk(A_ZOOM1) + "-" + tk(A_ZOOM4) + " and " + tk(A_ZOOM_ALL) +
+        " too); drag with the right or middle button, or hold Space, to move around. The overview at the bottom left "
+        "jumps anywhere. Tab hides the side panels for a bigger map."); } },
+    { TS_PALETTE, "Tiles, actors and prefabs", [] { return std::string(
+        "Everything you can paint with. Click a tile or actor and it becomes your brush; search finds anything by name. "
+        "Prefabs are pieces of level saved to place again - select part of a level and save it."); } },
+    { TS_TOOLS, "The tools", [] { return std::string(
+        "Select, Move, Magic select, Pencil, Eraser, Line, Rectangle, Fill and Pick, then Undo and Redo. "
+        "Alt-click picks up whatever is under the mouse as your brush; Shift-click with the Pencil draws a straight line. "
+        "Hover a tool for its key."); } },
+    { TS_PROTECT, "Protect", [] { return std::string(
+        "The padlocks keep walls, background, backdrop or actors safe from painting, filling, pasting and moving - "
+        "say, to repaint the open space without touching the walls."); } },
+    { TS_LEVELS, "Levels and backdrops", [] { return std::string(
+        "The project's levels (drag one to change the order; a mark shows any problems), then the open level's two "
+        "backdrops: its open space shows A, except where you paint B. Its message, if it has a Dr. Proton screen, is here too."); } },
+    { TS_PLAY, "Play it", [] { return std::string(
+        "Play here (" + tk(A_PLAY_HERE) + ") starts Duke at the middle of the view, or at the mouse, so you can test any part "
+        "right away; F4 comes back. From start (" + tk(A_PLAY_START) + ") plays the whole level, and reaching the exit "
+        "records a clear. The arrow beside Play here sets what Duke starts with."); } },
+    { TS_CHECK, "Checks", [] { return std::string(
+        "Shrapnel checks what the game needs - a start, an exit, a key for every lock, the actor limits - and shows the "
+        "result here. Click it for the list; Check (" + tk(A_CHECK) + ") runs them now."); } },
+    { TS_REACH, "Reach", [] { return std::string(
+        "Shows where Duke can get to, where he would get stuck (hatched), and one way to the exit."); } },
+    { TS_FILE, "Save and share", [] { return std::string(
+        "Save (" + tk(A_SAVE) + ") makes a .LEV (a level) or an .EPI (an episode). Put it in Techbot's LEVELS folder and play it "
+        "from U)ser levels. A DOS episode saves as map files for the original game. That's the tour - have fun!"); } },
+};
+static const int n_tour = (int)(sizeof tour_cards / sizeof tour_cards[0]);
+
+static void tour_start(void) { tour_step = 0; panels_hidden = false; }
+
+static void tour(void)
+{
+    if (tour_step < 0 || !editing()) return;
+    if (tour_step >= n_tour) { tour_step = -1; return; }
+    const TourCard &cd = tour_cards[tour_step];
+    ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImVec2 V0 = vp->Pos, V1(vp->Pos.x + vp->Size.x, vp->Pos.y + vp->Size.y);
+    bool has = cd.spot >= 0 && spot1[cd.spot].x > spot0[cd.spot].x;
+    float pad = 6 * ui_scale;
+    ImVec2 a = has ? ImVec2(spot0[cd.spot].x - pad, spot0[cd.spot].y - pad) : ImVec2(0, 0);
+    ImVec2 b = has ? ImVec2(spot1[cd.spot].x + pad, spot1[cd.spot].y + pad) : ImVec2(0, 0);
+
+    /* a window over everything (clicks don't reach the editor), dark but for the part explained */
+    ImGui::SetNextWindowPos(V0);
+    ImGui::SetNextWindowSize(vp->Size);
+    ImGui::Begin("##tourshade", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBackground |
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoNav);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImU32 dim = IM_COL32(0, 0, 0, theme_dark ? 165 : 120);
+    if (has) {
+        dl->AddRectFilled(V0, ImVec2(V1.x, a.y), dim);
+        dl->AddRectFilled(ImVec2(V0.x, b.y), V1, dim);
+        dl->AddRectFilled(ImVec2(V0.x, a.y), ImVec2(a.x, b.y), dim);
+        dl->AddRectFilled(ImVec2(b.x, a.y), ImVec2(V1.x, b.y), dim);
+        dl->AddRect(a, b, ImGui::GetColorU32(T.accent), 6 * ui_scale, 0, 2.5f * ui_scale);
+    } else dl->AddRectFilled(V0, V1, dim);
+    ImGui::End();
+
+    /* the card: beside the part explained, where there's room */
+    float cw = 380 * ui_scale, gap = 14 * ui_scale;
+    ImVec2 pos, piv(0, 0);
+    if (!has) { pos = ImVec2((V0.x + V1.x) / 2, (V0.y + V1.y) / 2); piv = ImVec2(0.5f, 0.5f); }
+    else if (V1.x - b.x > cw + gap) pos = ImVec2(b.x + gap, std::max(V0.y + gap, a.y));
+    else if (a.x - V0.x > cw + gap) pos = ImVec2(a.x - gap, std::max(V0.y + gap, a.y)), piv = ImVec2(1, 0);
+    else if (V1.y - b.y > 200 * ui_scale) pos = ImVec2(std::min(std::max(V0.x + gap, a.x), V1.x - cw - gap), b.y + gap);
+    else if (a.y - V0.y > 200 * ui_scale) pos = ImVec2(std::min(std::max(V0.x + gap, a.x), V1.x - cw - gap), a.y - gap), piv = ImVec2(0, 1);
+    else pos = ImVec2((a.x + b.x) / 2, b.y - 3 * gap), piv = ImVec2(0.5f, 1);   /* (no room around it - the map: inside, at the bottom) */
+    if (has && piv.y == 0 && b.y - a.y > (V1.y - V0.y) * 0.6f) pos.y = (a.y + b.y) / 2 - 90 * ui_scale;   /* (tall, beside it: about the middle) */
+    else if (has && piv.y == 0 && a.y > (V0.y + V1.y) / 2) pos.y = std::min(b.y, V1.y - gap), piv.y = 1;   /* (low down: lined up with its bottom) */
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always, piv);
+    ImGui::SetNextWindowSize(ImVec2(cw, 0));
+    ImGui::SetNextWindowFocus();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * ui_scale, 14 * ui_scale));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImGui::GetStyleColorVec4(ImGuiCol_PopupBg));
+    ImGui::PushStyleColor(ImGuiCol_Border, T.accent);
+    ImGui::Begin("##tourcard", NULL, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+                 ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar();
+    ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+    ImGui::Text("%d of %d", tour_step + 1, n_tour);
+    ImGui::PopStyleColor();
+    ImGui::PushFont(font_bold);
+    ImGui::SetWindowFontScale(1.15f);
+    ImGui::TextUnformatted(cd.title);
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::PopFont();
+    ImGui::Spacing();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + cw - 32 * ui_scale);
+    ImGui::TextUnformatted(cd.text().c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    ImGui::Spacing();
+    bool last = tour_step == n_tour - 1;
+    if (ImGui::Button("Skip", ImVec2(80 * ui_scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) tour_step = -1;
+    float bw = 90 * ui_scale;
+    ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - bw * 2 - 6 * ui_scale);
+    ImGui::BeginDisabled(tour_step <= 0);
+    if (ImGui::Button("Back", ImVec2(bw, 0)) || (tour_step > 0 && ImGui::IsKeyPressed(ImGuiKey_LeftArrow))) tour_step--;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    {   /* (like Play here: the accent, white words) */
+        ImVec4 f = T.accent, k = theme_dark ? ImVec4(0, 0, 0, 1) : f;
+        if (theme_dark) f = ImVec4(f.x * 0.65f + k.x * 0.35f, f.y * 0.65f + k.y * 0.35f, f.z * 0.65f + k.z * 0.35f, 1);
+        ImGui::PushStyleColor(ImGuiCol_Button, f);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(f.x * 0.88f + 0.12f, f.y * 0.88f + 0.12f, f.z * 0.88f + 0.12f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+    }
+    if (tour_step >= 0 && (ImGui::Button(last ? "Done" : "Next", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_RightArrow) ||
+                           ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+        tour_step = last ? -1 : tour_step + 1;
+    ImGui::PopStyleColor(3);
+    ImGui::End();
+}
+
+/* the guide (BUILDING.md), if it came with Shrapnel: beside it, or a folder up */
+static std::string guide_path(void)
+{
+    char *b = SDL_GetBasePath();
+    std::string base = b ? b : "";
+    SDL_free(b);
+    for (const char *rel : { "BUILDING.md", "../BUILDING.md", "../../BUILDING.md" })
+        if (path_exists(base + rel)) return base + rel;
+    return "";
+}
+
 /* the drawer under the map: Checks or History */
 static void drawer(float x, float y, float w, float h)
 {
@@ -3692,6 +3917,7 @@ static void status_bar(float y0, float w, float h)
         ImGui::SameLine(0, 14 * ui_scale);
         ImGui::SetCursorPosY(fy);
         if (ImGui::Button(chk)) run_check();                /* run the checks, and their result beside it */
+        spot(TS_CHECK, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("Run the checks now: the rules, whether the level can be finished, and the recorded clear.");
         ImGui::SameLine(0, 4 * ui_scale);
@@ -3700,6 +3926,7 @@ static void status_bar(float y0, float w, float h)
         ImGui::PushStyleColor(ImGuiCol_Text, col);
         ImGui::PushStyleColor(ImGuiCol_Button, drawer_open ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered) : ImVec4(0, 0, 0, 0));
         if (ImGui::Button(badge)) { if (drawer_open && drawer_tab == 0) drawer_open = false; else { drawer_open = true; drawer_tab = 0; } }
+        spot_join(TS_CHECK, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Show or hide the checks");
     }
@@ -3754,13 +3981,6 @@ static bool popup_cancel(void)
     return false;
 }
 
-static void rule(float w)                       /* a divider as wide as the page column */
-{
-    ImVec2 p = ImGui::GetCursorScreenPos();
-    ImGui::GetWindowDrawList()->AddLine(ImVec2(p.x, p.y + 4), ImVec2(p.x + w, p.y + 4), ImGui::GetColorU32(ImGuiCol_Separator));
-    ImGui::Dummy(ImVec2(w, 9));
-}
-
 /* the example level (PaulloDEC's), opened as a new project: saving asks where */
 #include "../resources/example_lev.h"
 static void open_example(void)
@@ -3804,112 +4024,932 @@ static void draw_logo(float maxw)
     ImGui::Image(tid(logo_tex), ImVec2(floorf(logo_w * s), floorf(logo_h * s)));
 }
 
+/* ---- the game's own pixel font (FONT1.DN1 + FONT2.DN1, read from the
+   player's game folder - nothing of it is shipped): 100 glyphs of 8x8, each
+   row a mask byte and four colour planes.  The white pixels are the letter
+   and the black ones (drawn, not see-through) its shadow; they go into two
+   textures so each can take its own colour. */
+static SDL_Texture *pfont_face, *pfont_shadow;
+static std::string pfont_from;                  /* the game folder they were read from ("" none; "-" tried, missing) */
+static bool pixel_font(void)
+{
+    std::string dir = bad_folder ? "" : std::string(shrapnel_game_dir ? shrapnel_game_dir : "");
+    if (dir == pfont_from || (pfont_from == "-" + dir)) return pfont_face != NULL;
+    if (pfont_face) { SDL_DestroyTexture(pfont_face); SDL_DestroyTexture(pfont_shadow); pfont_face = pfont_shadow = NULL; }
+    pfont_from = "-" + dir;
+    if (dir.empty()) return false;
+    std::vector<uint8_t> f(4000, 0);
+    for (int k = 0; k < 2; k++) {
+        FILE *fp = fopen(game_path(k ? "FONT2.DN1" : "FONT1.DN1"), "rb");
+        if (!fp) return false;
+        size_t n = 0;
+        if (fseek(fp, 3, SEEK_SET) == 0) n = fread(&f[k * 2000], 1, 2000, fp);    /* (as the game loads them: past a 3-byte header) */
+        fclose(fp);
+        if (n != 2000) return false;
+    }
+    std::vector<uint32_t> face(100 * 8 * 8, 0), shadow(100 * 8 * 8, 0);
+    for (int g = 0; g < 100; g++)
+        for (int r = 0; r < 8; r++) {
+            const uint8_t *b = &f[g * 40 + r * 5];
+            for (int x = 0; x < 8; x++) {
+                int bit = 0x80 >> x;
+                if (!(b[0] & bit)) continue;
+                int c = 0;
+                for (int pl = 0; pl < 4; pl++) if (b[1 + pl] & bit) c |= 1 << pl;
+                (c ? face : shadow)[(size_t)r * 800 + g * 8 + x] = 0xFFFFFFFF;
+            }
+        }
+    make_texture(&pfont_face, 800, 8);
+    make_texture(&pfont_shadow, 800, 8);
+    SDL_UpdateTexture(pfont_face, NULL, face.data(), 800 * 4);
+    SDL_UpdateTexture(pfont_shadow, NULL, shadow.data(), 800 * 4);
+    pfont_from = dir;
+    return true;
+}
+/* the logo's scale: whole screen pixels per game pixel; the pixel font is 1x or 2x that */
+static float logo_scale(void) { return std::max(1.0f, roundf(ui_scale * 0.75f)); }
+static float pixel_width(const char *t, float size) { return 8 * logo_scale() * size * (float)strlen(t); }
+/* `t` in the game's font as an item at the cursor, `size` times the logo's
+   pixels (false, drawing nothing, if the game folder has no font: the caller
+   writes it its own way).  As the game does: a fixed 8-pixel grid, lowercase
+   and the punctuation it has.  `face`: the letters' colour (else the game's
+   white in the dark theme, the text colour in the light). */
+static bool pixel_text(const char *t, float size = 2, const ImVec4 *face = NULL)
+{
+    if (!pixel_font()) return false;
+    float s = logo_scale() * size, g = 8 * s;
+    ImVec2 p = ImGui::GetCursorScreenPos();
+    p = ImVec2(floorf(p.x), floorf(p.y));
+    int n = (int)strlen(t);
+    ImGui::Dummy(ImVec2(g * n, g));
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float a = ImGui::GetStyle().Alpha;           /* (dimmed with the rest when disabled) */
+    ImVec4 fc = face ? *face : theme_dark ? ImVec4(1, 1, 1, 1) : ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    ImVec4 sc = theme_dark ? ImVec4(0, 0, 0, a) : ImVec4(fc.x, fc.y, fc.z, 0.28f * a);
+    fc.w = a;
+    ImU32 fu = ImGui::GetColorU32(fc), su = ImGui::GetColorU32(sc);
+    for (int i = 0; i < n; i++) {
+        int c = (unsigned char)t[i], k;
+        if (c >= 0x61 && c <= 0x7A) k = 69 + (c - 0x61);         /* (ui.c glyph(): 'a'.. at +AC8h, ' '.. at +190h) */
+        else if (c >= 0x20 && c < 0x61) k = 10 + (c - 0x20);
+        else continue;
+        ImVec2 q0(p.x + i * g, p.y), q1(q0.x + g, q0.y + g);
+        ImVec2 u0(k / 100.0f, 0), u1((k + 1) / 100.0f, 1);
+        dl->AddImage(tid(pfont_shadow), q0, q1, u0, u1, su);
+        dl->AddImage(tid(pfont_face), q0, q1, u0, u1, fu);
+    }
+    return true;
+}
+/* a start-screen heading: the game's font at 2x, or bold if there's none */
+static void start_heading(const char *t)
+{
+    if (pixel_text(t, 2)) return;
+    ImGui::PushFont(font_bold);
+    ImGui::SetWindowFontScale(1.25f);
+    ImGui::TextUnformatted(t);
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::PopFont();
+}
+/* the start screen's buttons: filled with the accent (the main choices), or plain */
+static bool start_button(const char *label, ImVec2 size, bool primary)
+{
+    if (primary) {
+        ImVec4 f = theme_dark ? ImVec4(T.accent.x * 0.65f, T.accent.y * 0.65f, T.accent.z * 0.65f, 1) : T.accent;
+        ImGui::PushStyleColor(ImGuiCol_Button, f);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(f.x * 0.88f + 0.12f, f.y * 0.88f + 0.12f, f.z * 0.88f + 0.12f, 1));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(f.x * 0.88f, f.y * 0.88f, f.z * 0.88f, 1));
+        ImGui::PushStyleColor(ImGuiCol_Border, theme_dark ? T.accent : f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+    }
+    bool r = ImGui::Button(label, size);
+    if (primary) ImGui::PopStyleColor(5);
+    return r;
+}
+/* a card on the start screen; card_end() evens up the heights of side-by-side ones */
+static void card_begin(const char *id, float w, bool accent_top = false, const ImVec4 *edge = NULL)
+{
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, T.panel);
+    ImGui::PushStyleColor(ImGuiCol_Border, edge ? *edge : T.border);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8 * ui_scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * ui_scale, 18 * ui_scale));
+    ImGui::BeginChild(id, ImVec2(w, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleColor(ImGuiCol_Border, T.border);   /* (the edge is the card's; what's in it, as usual) */
+    if (accent_top) {
+        ImVec2 p = ImGui::GetWindowPos();
+        float r = 8 * ui_scale;
+        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + ImGui::GetWindowWidth(), p.y + 3 * ui_scale),
+                                                  ImGui::GetColorU32(T.accent), r, ImDrawFlags_RoundCornersTop);
+    }
+}
+static void card_end(float *need = NULL, float tallest = 0)
+{
+    if (need) {                                 /* (what it needs, and room to match the tallest beside it) */
+        *need = ImGui::GetCursorPosY();
+        if (tallest > *need) ImGui::Dummy(ImVec2(1, tallest - *need - ImGui::GetStyle().ItemSpacing.y));
+    }
+    ImGui::PopStyleColor();
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
+}
+/* a path, cut from the left with "..." to fit `w` */
+static std::string fit_path(const std::string &t, float w)
+{
+    if (ImGui::CalcTextSize(t.c_str()).x <= w) return t;
+    for (size_t i = 1; i < t.size(); i++) {
+        std::string c = "..." + t.substr(i);
+        if (ImGui::CalcTextSize(c.c_str()).x <= w) return c;
+    }
+    return "...";
+}
+
+/* ---- behind the start screen: the game's own tiles, very faint.  Two
+   kinds (View > Start screen background): pieces of the stock levels (of
+   every episode in the folder) wiping on and off while drifting slowly, or a
+   slow rain of tiles piling up.  The tiles are greyed and put over the page's
+   colour as an Overlay blend would, at a quarter strength: the page is one flat
+   colour, so the result is worked out per pixel beforehand and drawn as it
+   is (SDL has no Overlay mode).  Animated tiles stand still. */
+struct SbgEpisode {
+    int number = 0;
+    uint32_t pal[16];
+    std::vector<uint8_t> px;                    /* every tile's pixels (colours 0..15), ATLAS_TILES x 256 */
+    std::vector<std::vector<uint16_t>> levels;  /* its ten levels, as in their files */
+    std::vector<std::vector<uint16_t>> after;   /* the same as the game holds them once loaded (made when first wanted) */
+    SDL_Texture *tex = NULL;                    /* the tiles, greyed and overlaid: 16 a row */
+    SDL_Texture *actors = NULL;                 /* each actor's picture, the same way (sbg.actor_at) */
+};
+static struct StartBg {
+    std::vector<SbgEpisode> eps;
+    std::string dir;                            /* the game folder they were read from */
+    std::string key;                            /* the page colour the textures were made for */
+    uint8_t black[3] = {};                      /* a black tile, overlaid the same way */
+    struct ActorAt { int x = 0, y = 0, w = 0, h = 0, ox = 0, oy = 0; };   /* where an actor's picture is in the actor atlas */
+    ActorAt actor_at[N_ACTORS];
+    int actors_w = 0, actors_h = 0;
+    SDL_Texture *target = NULL;                 /* building: the tiles drawn on a whole-pixel grid, then this moved smoothly */
+    int target_w = 0, target_h = 0;
+    int cur_ep = -1, cur_level = -1;            /* the level the tiles come from */
+    double t = -1;                              /* the clock (still while not animating or not focused) */
+    uint32_t seed = 1;
+    /* building */
+    double cycle0 = 0;
+    int oc = 0, orow = 0;                       /* the piece of level */
+    float pan_x = 0, pan_y = 0;                 /* a slow drift across the level, screen pixels a second */
+    bool fresh = true;
+    /* rain: a tile is its episode << 16 | its value */
+    struct Drop { int col; float y, v; uint32_t tile; };
+    std::vector<Drop> drops;
+    std::vector<std::vector<uint32_t>> piles;
+    std::vector<float> sink;
+    double next_drop = 0, next_level = 0;
+} sbg;
+
+static void sbg_reset(void) { sbg.t = -1; sbg.piles.clear(); sbg.drops.clear(); sbg.next_drop = sbg.next_level = 0; }
+static uint32_t sbg_rand(void) { sbg.seed = sbg.seed * 1664525u + 1013904223u; return sbg.seed >> 8; }
+static float sbg_frand(void) { return (sbg_rand() & 0xFFFF) / 65535.0f; }
+static float sbg_hash(int a, int b, int c)      /* a steady 0..1 for a cell */
+{
+    uint32_t h = (uint32_t)a * 73856093u ^ (uint32_t)b * 19349663u ^ (uint32_t)c * 83492791u;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return (h & 0xFFFF) / 65535.0f;
+}
+static bool sbg_content(uint16_t v) { return v > 0x20 && v < 0x3000; }   /* walls and background, not the backdrop */
+
+/* every episode's tiles and levels, read straight from the game files once
+   per game folder (a few milliseconds: no episode is loaded into the editor
+   for it).  The file names are the loaded episode's own, with the other
+   episodes' extensions; the tile files go in as the game loads them (each
+   one's last part spills into the next one's place, which that overwrites). */
+static std::string sbg_ep_name(std::string name, int n)
+{
+    if (!name.empty()) name[name.size() - 1] = (char)('0' + n);   /* WORLDAL1.DN1 -> WORLDAL1.DN2 */
+    return name;
+}
+static bool sbg_data(void)
+{
+    if (bad_folder || !ep.number || !shrapnel_game_dir) return false;
+    if (sbg.dir == shrapnel_game_dir) return !sbg.eps.empty();
+    sbg.dir = shrapnel_game_dir;
+    for (SbgEpisode &e : sbg.eps) { if (e.tex) SDL_DestroyTexture(e.tex); if (e.actors) SDL_DestroyTexture(e.actors); }
+    sbg.eps.clear();
+    sbg.key.clear();
+    sbg.cur_ep = sbg.cur_level = -1;
+    static const uint16_t tile_files[8] = { 0x0962, 0x096C, 0x0976, 0x0980, 0x098A, 0x0995, 0x09A0, 0x09AB };
+    std::string tnames[8], lnames[10];
+    for (int k = 0; k < 8; k++) tnames[k] = ds_str(tile_files[k]);
+    for (int k = 0; k < 10; k++) lnames[k] = ep.slot_file(k * 2);
+    const int VR = 0x3200;
+    std::vector<uint8_t> planes(4 * VR);
+    uint16_t m[ED_MAP_CELLS];
+    for (int n = 1; n <= 3; n++) {
+        if (!ep.available[n]) continue;
+        SbgEpisode e;
+        e.number = n;
+        memcpy(e.pal, ep.pal, sizeof e.pal);    /* (the same EGA colours in every episode) */
+        std::fill(planes.begin(), planes.end(), 0);
+        bool ok = true;
+        for (int k = 0; k < 8 && ok; k++) {
+            FILE *f = fopen(game_path(sbg_ep_name(tnames[k], n).c_str()), "rb");
+            if (!f) { ok = false; break; }
+            fgetc(f); fgetc(f); fgetc(f);
+            for (int i = 0; i < 0x780; i++) {
+                fgetc(f);
+                for (int pl = 0; pl < 4; pl++) {
+                    int c = fgetc(f);
+                    int at = k * 0x600 + i;
+                    if (at < VR) planes[pl * VR + at] = (uint8_t)c;
+                }
+            }
+            fclose(f);
+        }
+        if (!ok) continue;
+        e.px.resize((size_t)ATLAS_TILES * 256);
+        for (int t = 0; t < ATLAS_TILES; t++)
+            for (int y = 0; y < 16; y++)
+                for (int x = 0; x < 16; x++) {
+                    int o = t * 0x20 + y * 2 + (x >> 3), sh = 7 - (x & 7);
+                    uint8_t v = 0;
+                    if (o < VR)
+                        for (int pl = 0; pl < 4; pl++) v |= (uint8_t)(((planes[pl * VR + o] >> sh) & 1) << pl);
+                    e.px[(size_t)t * 256 + y * 16 + x] = v;
+                }
+        for (int k = 0; k < 10; k++)
+            if (!lnames[k].empty() && read_map_file(game_path(sbg_ep_name(lnames[k], n).c_str()), m))
+                e.levels.emplace_back(m, m + ED_MAP_CELLS);
+        if (!e.levels.empty()) sbg.eps.push_back(std::move(e));
+    }
+    if (getenv("SHRAPNEL_BG_CHECK"))            /* (tests: the tiles as read here against the editor's own) */
+        for (SbgEpisode &e : sbg.eps) {
+            Episode *tmp = new Episode();
+            tmp->load(e.number);
+            int bad = 0, pal_bad = memcmp(tmp->pal, e.pal, sizeof e.pal) != 0;
+            delete tmp;
+            uint8_t t[256];
+            for (int i = 0; i < 0x3000 / 0x20; i++) {
+                ed_tile((uint16_t)(i * 0x20), t);
+                if (memcmp(t, &e.px[(size_t)i * 256], 256)) bad++;
+            }
+            fprintf(stderr, "start background: episode %d, %d of %d tiles differ from the editor's%s\n", e.number, bad, 0x3000 / 0x20,
+                    pal_bad ? " (and its colours)" : "");
+            ep.load(ep.number);
+        }
+    return !sbg.eps.empty();
+}
+
+/* the tiles, greyed and laid over the page colour at a quarter strength */
+static bool sbg_tiles(void)
+{
+    if (!sbg_data()) return false;
+    ImVec4 bg = T.bar;
+    char key[64];
+    snprintf(key, sizeof key, "%.3f %.3f %.3f %d %d", bg.x, bg.y, bg.z, theme_dark, ep.number);
+    if (sbg.key == key) return true;
+    sbg.key = key;
+    const float strength = 0.25f * (theme_dark ? 1.0f : 0.8f);   /* (a quarter: faint) */
+    float b[3] = { bg.x, bg.y, bg.z };
+    for (int ch = 0; ch < 3; ch++) {            /* black (what shows the backdrop in the game), overlaid */
+        float r = b[ch] < 0.5f ? 0 : 1 - 2 * (1 - b[ch]);
+        sbg.black[ch] = (uint8_t)std::max(0, std::min(255, (int)lroundf((b[ch] + (r - b[ch]) * strength) * 255)));
+    }
+    auto overlay = [&](uint32_t c) -> uint32_t {   /* a colour greyed and laid over the page */
+        float l = (0.299f * ((c >> 16) & 255) + 0.587f * ((c >> 8) & 255) + 0.114f * (c & 255)) / 255;
+        uint32_t o = 0xFF000000u;
+        for (int ch = 0; ch < 3; ch++) {
+            float r = b[ch] < 0.5f ? 2 * b[ch] * l : 1 - 2 * (1 - b[ch]) * (1 - l);   /* Overlay */
+            r = b[ch] + (r - b[ch]) * strength;
+            o |= (uint32_t)std::max(0, std::min(255, (int)lroundf(r * 255))) << (16 - ch * 8);
+        }
+        return o;
+    };
+    /* where each actor's picture goes in the actor atlas (the same for every
+       episode: the actors are the loaded episode's, their sprites are the same
+       files in every episode, and pieces made of map tiles take each episode's tiles) */
+    {
+        int x = 0, y = 0, shelf = 0, aw = 512;
+        for (int i = 0; i < N_ACTORS; i++) {
+            const ActorLook &l = ep.looks[i];
+            StartBg::ActorAt &at = sbg.actor_at[i];
+            at = StartBg::ActorAt();
+            if (l.pieces.empty()) continue;
+            int x0 = 0, y0 = 0, x1 = 16, y1 = 16;
+            for (const Piece &pc : l.pieces) { x0 = std::min(x0, pc.dx); y0 = std::min(y0, pc.dy); x1 = std::max(x1, pc.dx + 16); y1 = std::max(y1, pc.dy + 16); }
+            at.w = x1 - x0; at.h = y1 - y0; at.ox = x0; at.oy = y0;
+            if (at.w > aw) { at.w = 0; continue; }
+            if (x + at.w > aw) { x = 0; y += shelf; shelf = 0; }
+            at.x = x; at.y = y;
+            x += at.w; shelf = std::max(shelf, at.h);
+        }
+        sbg.actors_w = aw; sbg.actors_h = std::max(16, y + shelf);
+    }
+    std::vector<uint32_t> img(256 * (ATLAS_TILES / 16) * 16);
+    std::vector<uint32_t> act((size_t)sbg.actors_w * sbg.actors_h);
+    for (SbgEpisode &e : sbg.eps) {
+        for (int i = 0; i < ATLAS_TILES; i++)
+            for (int k = 0; k < 256; k++)
+                img[((i / 16) * 16 + k / 16) * 256 + (i % 16) * 16 + k % 16] = overlay(e.pal[e.px[(size_t)i * 256 + k] & 15]);
+        make_texture(&e.tex, 256, ATLAS_TILES / 16 * 16);
+        SDL_UpdateTexture(e.tex, NULL, img.data(), 256 * 4);
+        std::fill(act.begin(), act.end(), 0);
+        for (int i = 0; i < N_ACTORS; i++) {
+            const StartBg::ActorAt &at = sbg.actor_at[i];
+            if (!at.w) continue;
+            for (const Piece &pc : ep.looks[i].pieces)
+                for (int k = 0; k < 256; k++) {
+                    int ci = pc.px[k];
+                    if (pc.tile && pc.tile < 0x3000 && e.number != ep.number) ci = e.px[(size_t)(pc.tile / 0x20) * 256 + k];
+                    if (ci == 255) continue;
+                    act[(size_t)(at.y + pc.dy - at.oy + k / 16) * sbg.actors_w + at.x + pc.dx - at.ox + k % 16] = overlay(e.pal[ci & 15]);
+                }
+        }
+        make_texture(&e.actors, sbg.actors_w, sbg.actors_h);
+        SDL_UpdateTexture(e.actors, NULL, act.data(), sbg.actors_w * 4);
+    }
+    return true;
+}
+/* the current level as in its file (where the actors are) */
+static const uint16_t *sbg_raw(void)
+{
+    if (sbg.cur_ep < 0 || sbg.cur_ep >= (int)sbg.eps.size()) return NULL;
+    SbgEpisode &e = sbg.eps[sbg.cur_ep];
+    return sbg.cur_level >= 0 && sbg.cur_level < (int)e.levels.size() ? e.levels[sbg.cur_level].data() : NULL;
+}
+/* ... and as the game holds it once loaded: each actor's cell takes what the
+   game's loader puts there (most often a copy of a neighbour), worked out by
+   the editor's own loader the first time the level is wanted (a millisecond
+   or so; the actors' rules are the same in every episode) */
+static const uint16_t *sbg_level(void)
+{
+    const uint16_t *raw = sbg_raw();
+    if (!raw) return NULL;
+    SbgEpisode &e = sbg.eps[sbg.cur_ep];
+    if (e.after.size() != e.levels.size()) e.after.resize(e.levels.size());
+    std::vector<uint16_t> &a = e.after[sbg.cur_level];
+    if (a.empty()) {
+        static Level *lv = new Level();
+        lv->load_map(ep, sbg.cur_level * 2, raw, "");
+        a.assign(lv->after, lv->after + ED_MAP_CELLS);
+    }
+    return a.data();
+}
+
+/* another level, from any episode, not the one just shown */
+static void sbg_next_level(void)
+{
+    int total = 0;
+    for (SbgEpisode &e : sbg.eps) total += (int)e.levels.size();
+    if (!total) return;
+    for (int tries = 0; tries < 8; tries++) {
+        int k = (int)(sbg_rand() % total), ei = 0;
+        while (k >= (int)sbg.eps[ei].levels.size()) k -= (int)sbg.eps[ei++].levels.size();
+        if (total > 1 && ei == sbg.cur_ep && k == sbg.cur_level) continue;
+        sbg.cur_ep = ei;
+        sbg.cur_level = k;
+        return;
+    }
+}
+
+/* building: a piece of a level that is all level - no edge of the map and
+   none of the empty space around a level's outside - for the whole of the
+   window and the whole of its drift (cols x rows cells on screen, drifting
+   for `secs` at ts pixels a cell) */
+static void sbg_new_piece(int cols, int rows, float ts, double secs)
+{
+    float a = sbg_frand() * 6.2831853f, speed = 7 * ui_scale;
+    sbg.pan_x = cosf(a) * speed;
+    sbg.pan_y = sinf(a) * speed;
+    float dx = sbg.pan_x * (float)secs, dy = sbg.pan_y * (float)secs;
+    int lo_c = (int)floorf(std::min(0.0f, dx) / ts) - 2, hi_c = cols + (int)ceilf(std::max(0.0f, dx) / ts) + 3;
+    int lo_r = (int)floorf(std::min(0.0f, dy) / ts) - 2, hi_r = rows + (int)ceilf(std::max(0.0f, dy) / ts) + 3;
+    int need_c = hi_c - lo_c, need_r = hi_r - lo_r;
+    int best = -1, best_oc = 0, best_or = 0, best_ep = -1, best_lv = -1;
+    for (int tries = 0; tries < 6 && best < 2000000; tries++) {
+        sbg_next_level();
+        const uint16_t *m = sbg_level();
+        if (!m) return;
+        /* where the level is: the rows and columns with a fair share of walls in them */
+        int rc[MAP_H] = {}, cc[MAP_W] = {};
+        for (int r = 0; r < MAP_H; r++)
+            for (int c = 0; c < MAP_W; c++) if (sbg_content(m[r * MAP_W + c])) { rc[r]++; cc[c]++; }
+        int r0 = 0, r1 = MAP_H - 1, c0 = 0, c1 = MAP_W - 1;
+        while (r0 < r1 && rc[r0] < MAP_W / 5) r0++;
+        while (r1 > r0 && rc[r1] < MAP_W / 5) r1--;
+        while (c0 < c1 && cc[c0] < MAP_H / 5) c0++;
+        while (c1 > c0 && cc[c1] < MAP_H / 5) c1--;
+        r0++; c0++; r1--; c1--;                 /* (not the outer wall itself either) */
+        int span_c = c1 - c0 + 1 - need_c, span_r = r1 - r0 + 1 - need_r;
+        for (int k = 0; k < 40; k++) {
+            int sc = span_c > 0 ? c0 + (int)(sbg_rand() % (span_c + 1)) : c0 + span_c / 2;
+            int sr = span_r > 0 ? r0 + (int)(sbg_rand() % (span_r + 1)) : r0 + span_r / 2;
+            /* no stretch of nothing: every ninth of it has walls in it; and
+               shapes, not a solid block (count the edges of walls) */
+            int blocks_ok = 1, edges = 0;
+            for (int by = 0; by < 3; by++)
+                for (int bx = 0; bx < 3; bx++) {
+                    int n = 0, filled = 0;
+                    for (int r = sr + by * need_r / 3; r < sr + (by + 1) * need_r / 3; r++)
+                        for (int c = sc + bx * need_c / 3; c < sc + (bx + 1) * need_c / 3; c++) {
+                            n++;
+                            if (r >= 0 && r < MAP_H && c >= 0 && c < MAP_W && sbg_content(m[r * MAP_W + c])) filled++;
+                        }
+                    if (n && filled * 100 < n * 15) blocks_ok = 0;
+                }
+            for (int r = std::max(0, sr); r < std::min(MAP_H - 1, sr + need_r); r++)
+                for (int c = std::max(0, sc); c < std::min(MAP_W - 1, sc + need_c); c++) {
+                    bool h = sbg_content(m[r * MAP_W + c]);
+                    edges += (h != sbg_content(m[r * MAP_W + c + 1])) + (h != sbg_content(m[(r + 1) * MAP_W + c]));
+                }
+            bool fits = span_c >= 0 && span_r >= 0;      /* (a level too small for the window: the best there is) */
+            int score = (fits && blocks_ok ? 2000000 : fits ? 1000000 : 0) + edges;
+            if (score > best) { best = score; best_oc = sc - lo_c; best_or = sr - lo_r; best_ep = sbg.cur_ep; best_lv = sbg.cur_level; }
+        }
+    }
+    sbg.cur_ep = best_ep;
+    sbg.cur_level = best_lv;
+    sbg.oc = best_oc;
+    sbg.orow = best_or;
+}
+
+static void start_background(ImDrawList *dl, ImVec2 p0, ImVec2 p1)
+{
+    if (start_bg == BG_OFF || !sbg_tiles()) return;
+    /* game pixels as big as the window's height suits (whole screen pixels):
+       2x below about 1260 pixels high (a 1080p screen), 3x from there (a
+       1440p one, maximised), 4x from about 1680, 5x from 2100 */
+    float fbs0 = ImGui::GetIO().DisplayFramebufferScale.x;
+    float ts = 16 * std::max(2.0f, floorf((p1.y - p0.y) * fbs0 / 420)) / fbs0;
+    int cols = (int)ceilf((p1.x - p0.x) / ts), rows = (int)ceilf((p1.y - p0.y) / ts);
+    if (cols <= 0 || rows <= 0) return;
+    bool moving = view.animate && app_focused;
+    if (sbg.t < 0) {                            /* (first time: a running start) */
+        sbg.seed = (uint32_t)SDL_GetTicks() | 1;
+        const char *e = getenv("SHRAPNEL_BG_TIME");
+        sbg.t = e ? atof(e) : (start_bg == BG_BUILD ? 6.5 : 0);
+        sbg.fresh = true;
+        if (e) sbg.seed = 12345;
+    }
+    static bool fixed = getenv("SHRAPNEL_BG_TIME") != NULL;    /* (tests: 60 steps a second, whatever the frame rate) */
+    double dt = moving ? (fixed ? 1.0 / 60 : std::min(0.1, (double)ImGui::GetIO().DeltaTime)) : 0;
+    sbg.t += dt;
+    auto tile = [&](uint32_t et, float x, float y, float a) {   /* (episode << 16 | value) */
+        int ei = (int)(et >> 16), i = (int)((et & 0xFFFF) / 0x20);
+        if (ei >= (int)sbg.eps.size() || i >= ATLAS_TILES || !sbg.eps[ei].tex) return;
+        ImVec2 uv0((i % 16) / 16.0f, (i / 16) * 16.0f / (ATLAS_TILES / 16 * 16));
+        ImVec2 uv1(uv0.x + 1 / 16.0f, uv0.y + 16.0f / (ATLAS_TILES / 16 * 16));
+        ImU32 col = a >= 1 ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, (int)(a * 255));
+        dl->AddImage(tid(sbg.eps[ei].tex), ImVec2(floorf(x), floorf(y)), ImVec2(floorf(x) + ts, floorf(y) + ts), uv0, uv1, col);
+    };
+
+    if (start_bg == BG_BUILD) {
+        /* wipe on (3.5 s), stand (9 s), wipe off (3 s), a breath (1.5 s) */
+        const double BUILD = 3.5, STAND = 9, APART = 3, GAP = 1.5, CYCLE = BUILD + STAND + APART + GAP;
+        const double EACH = 0.4, SPREAD_IN = BUILD - EACH, SPREAD_OUT = APART - EACH;
+        double ct = sbg.t - sbg.cycle0;
+        if (sbg.fresh || ct >= CYCLE) {
+            if (!sbg.fresh) sbg.cycle0 += CYCLE * floor(ct / CYCLE);
+            else sbg.cycle0 = 0;
+            sbg.fresh = false;
+            sbg_new_piece(cols, rows, ts, CYCLE);
+            ct = sbg.t - sbg.cycle0;
+        }
+        if (!view.animate) ct = BUILD + 1;      /* (no motion: the piece, built) */
+        const uint16_t *m = sbg_level();
+        if (!m || sbg.cur_ep < 0 || !sbg.eps[sbg.cur_ep].tex) return;
+        /* the whole time, a slow drift across the level.  The tiles are drawn
+           on a whole-pixel grid into a texture of their own (crisp), and that
+           is drawn at the fraction of a pixel left over, smoothed, so the drift
+           is smooth rather than a pixel at a time.  It wipes on from the bottom
+           left to the top right, and off the same way; a cell that shows the
+           backdrop in the game is a black tile. */
+        float ox = view.animate ? sbg.pan_x * (float)ct : 0, oy = view.animate ? sbg.pan_y * (float)ct : 0;
+        float fbs = ImGui::GetIO().DisplayFramebufferScale.x;
+        float oxi = floorf(ox * fbs) / fbs, oyi = floorf(oy * fbs) / fbs;     /* (whole pixels of the screen) */
+        float W = p1.x - p0.x, H = p1.y - p0.y;
+        int tw = (int)ceilf((W + 2 * ts) * fbs), th = (int)ceilf((H + 2 * ts) * fbs);
+        if (!sbg.target || tw != sbg.target_w || th != sbg.target_h) {
+            if (sbg.target) SDL_DestroyTexture(sbg.target);
+            sbg.target = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, tw, th);
+            if (!sbg.target) return;
+            SDL_SetTextureScaleMode(sbg.target, SDL_ScaleModeLinear);
+            SDL_SetTextureBlendMode(sbg.target, SDL_BLENDMODE_NONE);   /* (opaque: its own page colour) */
+            sbg.target_w = tw; sbg.target_h = th;
+        }
+        SDL_Texture *was = SDL_GetRenderTarget(ren);
+        float sx, sy;
+        SDL_RenderGetScale(ren, &sx, &sy);
+        SDL_SetRenderTarget(ren, sbg.target);
+        SDL_RenderSetScale(ren, 1, 1);
+        ImVec4 bg = T.bar;
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_NONE);
+        SDL_SetRenderDrawColor(ren, (Uint8)lroundf(bg.x * 255), (Uint8)lroundf(bg.y * 255), (Uint8)lroundf(bg.z * 255), 255);
+        SDL_RenderClear(ren);
+        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+        SDL_Texture *tex = sbg.eps[sbg.cur_ep].tex;
+        int tpx = (int)lroundf(ts * fbs);
+        int c0 = (int)floorf(oxi / ts) - 1, r0 = (int)floorf(oyi / ts) - 1;
+        for (int r = r0; r <= r0 + rows + 2; r++)
+            for (int c = c0; c <= c0 + cols + 2; c++) {
+                int mc = ((sbg.oc + c) % MAP_W + MAP_W) % MAP_W, mr = ((sbg.orow + r) % MAP_H + MAP_H) % MAP_H;
+                uint16_t v = m[mr * MAP_W + mc];            /* (actors' cells: what the loader left there) */
+                float x = c * ts - oxi, y = r * ts - oyi;   /* (from the window's corner) */
+                float u = std::max(0.0f, std::min(1.0f, (x + ts / 2) / W));
+                float w = std::max(0.0f, std::min(1.0f, 1 - (y + ts / 2) / H));
+                float d = 0.92f * (u * W + w * H) / (W + H);                          /* (the wipe's front, at 45 degrees) */
+                double tin = (d + 0.08f * sbg_hash(mc, mr, 1)) * SPREAD_IN;
+                double tout = BUILD + STAND + (d + 0.08f * sbg_hash(mc, mr, 2)) * SPREAD_OUT;
+                float a_in = (float)std::max(0.0, std::min(1.0, (ct - tin) / EACH));
+                float a_out = (float)std::max(0.0, std::min(1.0, (ct - tout) / EACH));
+                if (a_in <= 0 || a_out >= 1) continue;
+                Uint8 a = (Uint8)lroundf(a_in * (1 - a_out) * 255);         /* (a fade in place) */
+                SDL_Rect dst = { (int)lroundf((x + ts) * fbs), (int)lroundf((y + ts) * fbs), tpx, tpx };
+                if (sbg_content(v)) {
+                    int i = v / 0x20;
+                    SDL_Rect src = { (i % 16) * 16, (i / 16) * 16, 16, 16 };
+                    SDL_SetTextureAlphaMod(tex, a);
+                    SDL_RenderCopy(ren, tex, &src, &dst);
+                } else {
+                    SDL_SetRenderDrawColor(ren, sbg.black[0], sbg.black[1], sbg.black[2], a);
+                    SDL_RenderFillRect(ren, &dst);
+                }
+            }
+        /* the actors over the cells, each fading with its own cell (ones just
+           off the edge can reach in) */
+        SDL_Texture *atex = sbg.eps[sbg.cur_ep].actors;
+        const uint16_t *raw = sbg_raw();
+        float gp = ts / 16;                     /* (screen pixels a game pixel) */
+        for (int r = r0 - 3; r <= r0 + rows + 5 && atex; r++)
+            for (int c = c0 - 3; c <= c0 + cols + 5; c++) {
+                int mc = ((sbg.oc + c) % MAP_W + MAP_W) % MAP_W, mr = ((sbg.orow + r) % MAP_H + MAP_H) % MAP_H;
+                uint16_t v = raw[mr * MAP_W + mc];
+                if (v < 0x3000 || v >= 0x3000 + N_ACTORS) continue;
+                const StartBg::ActorAt &at = sbg.actor_at[v - 0x3000];
+                if (!at.w) continue;
+                float x = c * ts - oxi, y = r * ts - oyi;
+                float u = std::max(0.0f, std::min(1.0f, (x + ts / 2) / W));
+                float w = std::max(0.0f, std::min(1.0f, 1 - (y + ts / 2) / H));
+                float d = 0.92f * (u * W + w * H) / (W + H);
+                double tin = (d + 0.08f * sbg_hash(mc, mr, 1)) * SPREAD_IN;
+                double tout = BUILD + STAND + (d + 0.08f * sbg_hash(mc, mr, 2)) * SPREAD_OUT;
+                float a_in = (float)std::max(0.0, std::min(1.0, (ct - tin) / EACH));
+                float a_out = (float)std::max(0.0, std::min(1.0, (ct - tout) / EACH));
+                if (a_in <= 0 || a_out >= 1) continue;
+                SDL_Rect src = { at.x, at.y, at.w, at.h };
+                SDL_Rect dst = { (int)lroundf((x + ts + at.ox * gp) * fbs), (int)lroundf((y + ts + at.oy * gp) * fbs),
+                                 (int)lroundf(at.w * gp * fbs), (int)lroundf(at.h * gp * fbs) };
+                SDL_SetTextureAlphaMod(atex, (Uint8)lroundf(a_in * (1 - a_out) * 255));
+                SDL_RenderCopy(ren, atex, &src, &dst);
+            }
+        if (atex) SDL_SetTextureAlphaMod(atex, 255);
+        SDL_SetTextureAlphaMod(tex, 255);
+        SDL_SetRenderTarget(ren, was);
+        SDL_RenderSetScale(ren, sx, sy);
+        float fx = ox - oxi, fy = oy - oyi;     /* (the fraction left over) */
+        ImVec2 q0(p0.x - ts - fx, p0.y - ts - fy);
+        dl->AddImage(tid(sbg.target), q0, ImVec2(q0.x + tw / fbs, q0.y + th / fbs));
+    } else {
+        /* rain: tiles fall down the columns and pile up; a pile that gets
+           high enough lets its bottom tile go and settles down a place */
+        if (!sbg_level() || sbg.t >= sbg.next_level) { sbg_next_level(); sbg.next_level = sbg.t + 40; }
+        const uint16_t *m = sbg_level();
+        if (!m) return;
+        int high = std::max(3, rows / 5);
+        auto any_tile = [&]() -> uint32_t {
+            for (int k = 0; k < 40; k++) {
+                uint16_t v = m[sbg_rand() % ED_MAP_CELLS];
+                if (sbg_content(v)) return (uint32_t)sbg.cur_ep << 16 | v;
+            }
+            return (uint32_t)sbg.cur_ep << 16 | 0x1800;
+        };
+        if ((int)sbg.piles.size() != cols) {    /* (a start mid-way: an uneven skyline, and some on the way down) */
+            sbg.piles.assign(cols, {});
+            sbg.sink.assign(cols, 0);
+            sbg.drops.clear();
+            float h = high * 0.5f;
+            for (int c = 0; c < cols; c++) {
+                h = std::max(0.0f, std::min((float)high, h + (sbg_frand() - 0.5f) * 2.5f));
+                for (int k = 0; k < (int)h; k++) sbg.piles[c].push_back(any_tile());
+            }
+            for (int k = 0; k < cols * rows / 60; k++) {
+                StartBg::Drop d;
+                d.col = (int)(sbg_rand() % cols);
+                d.y = sbg_frand() * rows * ts * 0.7f;
+                d.v = ts * (2.6f + 1.6f * sbg_frand());
+                d.tile = any_tile();
+                sbg.drops.push_back(d);
+            }
+        }
+        float rate = 0.12f * 90.0f / cols;      /* seconds between drops, for the window's width */
+        while (moving && sbg.t >= sbg.next_drop) {
+            sbg.next_drop = std::max(sbg.next_drop, sbg.t - 1) + rate * (0.5f + sbg_frand());
+            StartBg::Drop d;
+            d.col = (int)(sbg_rand() % cols);
+            d.y = -ts;
+            d.v = ts * (2.6f + 1.6f * sbg_frand());            /* tiles a second */
+            d.tile = any_tile();
+            sbg.drops.push_back(d);
+        }
+        float floor_y = p0.y + rows * ts;
+        for (int c = 0; c < cols; c++) {        /* the piles */
+            std::vector<uint32_t> &pl = sbg.piles[c];
+            if ((int)pl.size() > high || sbg.sink[c] > 0) {
+                sbg.sink[c] += (float)dt / 1.2f;
+                if (sbg.sink[c] >= 1) { pl.erase(pl.begin()); sbg.sink[c] = 0; }
+            }
+            float off = sbg.sink[c] * ts;
+            for (size_t k = 0; k < pl.size(); k++)
+                tile(pl[k], p0.x + c * ts, floor_y - (k + 1) * ts + off, k == 0 ? 1 - sbg.sink[c] : 1);
+        }
+        for (size_t i = 0; i < sbg.drops.size();) {   /* what's falling */
+            StartBg::Drop &d = sbg.drops[i];
+            std::vector<uint32_t> &pl = sbg.piles[d.col];
+            float top = floor_y - (pl.size() + 1) * ts + sbg.sink[d.col] * ts;
+            d.y += d.v * (float)dt;
+            if (p0.y + d.y >= top) { pl.push_back(d.tile); sbg.drops.erase(sbg.drops.begin() + i); continue; }
+            tile(d.tile, p0.x + d.col * ts, p0.y + d.y, std::min(1.0f, (d.y + ts) / (3 * ts)));
+            i++;
+        }
+    }
+}
+
 static void start_screen(float y0)
 {
     ImGuiIO &io = ImGui::GetIO();
     ImGui::SetNextWindowPos(ImVec2(0, y0));
     ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, io.DisplaySize.y - y0));
+    /* the page's content in the middle of the window, top to bottom, when it
+       fits (no scrollbar, no scrolling); from the top, scrolling, when not.
+       (By its height last frame.) */
+    static float content_h = 0;
+    const float u = ui_scale, margin = 20 * u;
+    float inner = io.DisplaySize.y - y0 - 2 * ImGui::GetStyle().WindowPadding.y;
+    bool fits = content_h > 0 && content_h + 2 * margin <= inner;
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, T.bar);    /* (the page a shade back, the cards on it) */
     ImGui::Begin("##start", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
-    float W = std::min(io.DisplaySize.x - 48 * ui_scale, 980 * ui_scale);
-    ImGui::SetCursorPosX((io.DisplaySize.x - W) / 2);
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                 (fits ? ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse : 0));
+    ImGui::PopStyleColor();
+    if (fits) ImGui::SetScrollY(0);
+    {   /* the tiles behind, fixed to the window (not scrolled) */
+        ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+        start_background(ImGui::GetWindowDrawList(), wp, ImVec2(wp.x + ws.x, wp.y + ws.y));
+    }
+    float W = std::min(io.DisplaySize.x - 64 * u, 960 * u);
+    float x0 = floorf((io.DisplaySize.x - W) / 2);
+    ImGui::Dummy(ImVec2(1, fits ? floorf((inner - content_h) / 2) : margin));
+    ImGui::SetCursorPosX(x0);
     ImGui::BeginGroup();
-    ImGui::Dummy(ImVec2(W, 12 * ui_scale));
+    ImGui::Dummy(ImVec2(W, 0));
+    const ImVec2 sp = ImGui::GetStyle().ItemSpacing;
+
+    /* the logo, and what Shrapnel is - centred */
+    if (logo_w > 0) ImGui::SetCursorPosX(x0 + std::max(0.0f, floorf((W - logo_w * std::max(1.0f, std::min(logo_scale(), floorf(W / logo_w)))) / 2)));
     draw_logo(W);
     if (logo_w < 0) {                           /* (no logo: the word) */
         ImGui::SetWindowFontScale(1.6f);
         ImGui::Text("Shrapnel");
         ImGui::SetWindowFontScale(1.0f);
     }
-    ImGui::Spacing();
-    ImGui::TextDisabled("A level editor for Duke Nukem (1991), for Techbot and for the original DOS game.");
-    ImGui::Spacing();
-
-    /* the game folder */
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Game folder");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(W - 260 * ui_scale);
-    ImGui::InputText("##folder", folder_buf, sizeof folder_buf);
-    ImGui::SameLine();
-    if (ImGui::Button("Use this folder") && !try_folder(folder_buf)) say("No DN1.EXE, DN2.EXE or DN3.EXE in that folder.");
-    ImGui::SameLine();
-    if (ImGui::Button("Browse...")) {
-        std::string d = dialog_folder(folder_buf, "Choose the game folder (with DN1.EXE)");
-        if (!d.empty()) { snprintf(folder_buf, sizeof folder_buf, "%s", d.c_str()); if (!try_folder(folder_buf)) say("No DN1.EXE, DN2.EXE or DN3.EXE in that folder."); }
+    ImGui::Dummy(ImVec2(1, 6 * u));
+    {
+        const char *tag = "A level editor for Duke Nukem (1991), for Techbot and for the original DOS game.";
+        float tw = pixel_font() ? pixel_width(tag, 1) : ImGui::CalcTextSize(tag).x;
+        ImGui::SetCursorPosX(x0 + std::max(0.0f, floorf((W - tw) / 2)));
+        if (!pixel_text(tag, 1, &T.muted)) ImGui::TextDisabled("%s", tag);
     }
-    if (bad_folder) ImGui::TextColored(T.warn, "No DN1.EXE, DN2.EXE or DN3.EXE here. Choose the folder of an installed Duke Nukem episode.");
-    else {
-        std::string eps;
-        for (int k = 1; k <= 3; k++) if (ep.available[k]) eps += (eps.empty() ? "" : ", ") + std::to_string(k);
-        ImGui::TextDisabled("Episodes here: %s. Shrapnel only reads this folder; nothing is saved into it.", eps.c_str());
-    }
-    ImGui::Spacing();
-    rule(W);
-    ImGui::Spacing();
+    ImGui::Dummy(ImVec2(1, 26 * u));
 
+    /* the game folder: when it's fine, a plain statement of it (and a way to
+       change it); when it isn't, or while changing it, what to do */
+    start_heading("Game folder");
+    ImGui::Dummy(ImVec2(1, 4 * u));
+    static bool folder_edit;                    /* changing a folder that was fine */
+    static std::string folder_err;              /* the last folder tried, if it had no game in it */
+    bool asking = bad_folder || folder_edit;
+    auto use_folder = [&](const char *dir) {   /* (a folder that was fine stays, if the new one isn't) */
+        std::string prev = (!bad_folder && shrapnel_game_dir) ? shrapnel_game_dir : "";
+        if (try_folder(dir)) { folder_edit = false; folder_err.clear(); return; }
+        folder_err = dir;
+        if (!prev.empty()) try_folder(prev.c_str());
+    };
+    static bool first = true;                   /* (the folder Shrapnel started with: say why it won't do) */
+    if (first) { first = false; if (bad_folder && folder_buf[0]) folder_err = folder_buf; }
+    ImVec4 warn_edge(T.warn.x, T.warn.y, T.warn.z, 0.7f);
+    card_begin("##folder", W, false, bad_folder ? &warn_edge : NULL);
+    {
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        float big = font_icons_lg->FontSize, line = ImGui::GetTextLineHeightWithSpacing();
+        ImVec2 p = ImGui::GetCursorScreenPos();
+        float tx = p.x + big + 14 * u;
+        const char *icon = asking ? (bad_folder ? ICON_WARNING_FILLED : ICON_FOLDER_OPEN) : ICON_CHECK_CIRCLE;
+        ImVec4 ic = asking ? (bad_folder ? T.warn : T.accent_text) : T.good;
+        dl->AddText(font_icons_lg, big, ImVec2(p.x, p.y + (2 * line - big) / 2 - 2 * u), ImGui::GetColorU32(ic), icon);
+        float bw = ImGui::CalcTextSize("Change folder...").x + 32 * u;
+        ImGui::SetCursorScreenPos(ImVec2(tx, p.y));
+        ImGui::BeginGroup();
+        ImGui::PushFont(font_bold);
+        if (!asking) {
+            std::string eps;
+            int n = 0;
+            for (int k = 1; k <= 3; k++) if (ep.available[k]) n++;
+            for (int k = 1, i = 0; k <= 3; k++) {
+                if (!ep.available[k]) continue;
+                eps += (i == 0 ? "" : i == n - 1 ? " and " : ", ") + std::to_string(k);
+                i++;
+            }
+            std::string title = "Ready: Duke Nukem " + std::string(n > 1 ? "episodes " : "episode ") + eps + " found";
+            ImGui::TextUnformatted(title.c_str());
+        } else ImGui::TextUnformatted(bad_folder ? "Shrapnel needs your Duke Nukem folder" : "Choose another Duke Nukem folder");
+        ImGui::PopFont();
+        float avail = ImGui::GetContentRegionAvail().x - (asking ? 0 : bw + 16 * u);
+        if (!asking) {
+            std::error_code ec;
+            std::string full = shrapnel_game_dir ? shrapnel_game_dir : "";
+            std::filesystem::path fp = std::filesystem::weakly_canonical(std::filesystem::absolute(std::filesystem::u8path(full), ec), ec);
+            if (!ec) full = fp.u8string();
+            ImGui::TextColored(T.muted, "%s", fit_path(full, avail).c_str());
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", full.c_str());
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + avail);
+            ImGui::TextUnformatted("The folder of an installed copy of the game, with DN1.EXE, DN2.EXE or DN3.EXE in it "
+                                   "(any episodes). Shrapnel only reads from it.");
+            ImGui::PopTextWrapPos();
+            ImGui::PopStyleColor();
+        }
+        ImGui::EndGroup();
+        if (!asking) {                          /* (the one thing to do here: change it) */
+            ImGui::SameLine();
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - bw);
+            ImGui::SetCursorScreenPos(ImVec2(ImGui::GetCursorScreenPos().x, p.y + (2 * line - ImGui::GetFrameHeight()) / 2 - 2 * u));
+            if (ImGui::Button("Change folder...", ImVec2(bw, 0))) {
+                folder_edit = true;
+                folder_err.clear();
+                snprintf(folder_buf, sizeof folder_buf, "%s", shrapnel_game_dir ? shrapnel_game_dir : "");
+            }
+        } else {
+            ImGui::Dummy(ImVec2(1, 6 * u));
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + big + 14 * u);
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * u, 7 * u));
+            float bw1 = ImGui::CalcTextSize("Browse...").x + 28 * u, bw2 = ImGui::CalcTextSize("Use this folder").x + 28 * u;
+            float bw3 = folder_edit ? ImGui::CalcTextSize("Cancel").x + 28 * u : 0;
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x - bw1 - bw2 - bw3 - (folder_edit ? 3 : 2) * sp.x);
+            bool enter = ImGui::InputTextWithHint("##folder", "Type or paste the folder, or Browse", folder_buf, sizeof folder_buf,
+                                                  ImGuiInputTextFlags_EnterReturnsTrue);
+            ImGui::SameLine();
+            if (start_button("Browse...", ImVec2(bw1, 0), true)) {
+                std::string d = dialog_folder(folder_buf, "Choose the game folder (with DN1.EXE)");
+                if (!d.empty()) { snprintf(folder_buf, sizeof folder_buf, "%s", d.c_str()); use_folder(folder_buf); }
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(!folder_buf[0]);
+            if (ImGui::Button("Use this folder", ImVec2(bw2, 0)) || (enter && folder_buf[0])) use_folder(folder_buf);
+            ImGui::EndDisabled();
+            if (folder_edit) {
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel", ImVec2(bw3, 0))) { folder_edit = false; folder_err.clear(); }
+            }
+            ImGui::PopStyleVar();
+            if (!folder_err.empty()) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + big + 14 * u);
+                ImGui::TextColored(T.warn, "No DN1.EXE, DN2.EXE or DN3.EXE in %s.", fit_path(folder_err, W * 0.6f).c_str());
+            }
+        }
+    }
+    card_end();
+    ImGui::Dummy(ImVec2(1, 18 * u));
+
+    /* the two kinds of project */
     static int new_ep = 1, new_levels = 10, dos_ep = 1;
+    static float need[2];
     const char *open_now = NULL;
     bool ok = !bad_folder;
-    float col = (W - 24 * ui_scale) / 2, bw = col - 16 * ui_scale;
+    float gap = 20 * u, col = floorf((W - gap) / 2), tallest = std::max(need[0], need[1]);
     ImGui::BeginDisabled(!ok);
-    ImGui::BeginChild("##techbot", ImVec2(col, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-    ImGui::SetWindowFontScale(1.25f);
-    ImGui::Text("Techbot Compatible");
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::TextWrapped("Plays in Techbot. An episode can have any number of levels, each hallway its own map. "
-                       "Saved as a .LEV (one level) or an .EPI (an episode), ready to share.");
-    ImGui::Spacing();
-    if (ImGui::Button("New level", ImVec2(bw, 0))) open_now = "New level";
-    if (ImGui::Button("New episode", ImVec2(bw, 0))) open_now = "New episode";
-    if (ImGui::Button("Open a level", ImVec2(bw, 0))) open_now = "Open a level";
-    if (ImGui::Button("Open an episode", ImVec2(bw, 0))) open_now = "Open an episode";
-    if (ImGui::Button(ICON_PLAY_ARROW " Open the example level", ImVec2(bw, 0))) open_example();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-        ImGui::SetTooltip("A small finished level to play and take apart: keys and locks, items, traps, an exit.");
-    ImGui::EndChild();
-    ImGui::SameLine(0, 24 * ui_scale);
-    ImGui::BeginChild("##dos", ImVec2(col, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-    ImGui::SetWindowFontScale(1.25f);
-    ImGui::Text("DOS Compatible");
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::TextWrapped("Plays in the original DOS game too. An episode of ten levels and the one hallway they share, "
-                       "saved as that episode's own map files, to copy over a DOS install.");
-    ImGui::Spacing();
-    if (ImGui::Button("New DOS episode", ImVec2(bw, 0))) open_now = "New DOS episode";
-    if (ImGui::Button("Open a DOS episode", ImVec2(bw, 0))) open_now = "Open a DOS episode";
-    ImGui::EndChild();
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * u, 8 * u));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * u, 10 * u));
+    card_begin("##techbot", col, true);
+    {
+        float half = floorf((ImGui::GetContentRegionAvail().x - 10 * u) / 2), full = ImGui::GetContentRegionAvail().x;
+        ImGui::Dummy(ImVec2(1, 2 * u));
+        start_heading("Techbot Compatible");
+        ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+        ImGui::TextWrapped("Plays in Techbot. An episode can have any number of levels, each hallway its own map. "
+                           "Saved as a .LEV (one level) or an .EPI (an episode), ready to share.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(1, 2 * u));
+        if (start_button(ICON_NOTE_ADD "  New level", ImVec2(half, 0), true)) open_now = "New level";
+        ImGui::SameLine();
+        if (start_button(ICON_CREATE_NEW_FOLDER "  New episode", ImVec2(half, 0), true)) open_now = "New episode";
+        if (start_button(ICON_FILE_OPEN "  Open a level", ImVec2(half, 0), false)) open_now = "Open a level";
+        ImGui::SameLine();
+        if (start_button(ICON_FOLDER_OPEN "  Open an episode", ImVec2(half, 0), false)) open_now = "Open an episode";
+        if (start_button(ICON_PLAY_ARROW "  Open the example level", ImVec2(full, 0), false)) open_example();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+            ImGui::SetTooltip("A small finished level to play and take apart: keys and locks, items, traps, an exit.");
+    }
+    card_end(&need[0], tallest);
+    ImGui::SameLine(0, gap);
+    card_begin("##dos", col, true);
+    {
+        float half = floorf((ImGui::GetContentRegionAvail().x - 10 * u) / 2);
+        ImGui::Dummy(ImVec2(1, 2 * u));
+        start_heading("DOS Compatible");
+        ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+        ImGui::TextWrapped("Plays in the original DOS game too. An episode of ten levels and the one hallway they share, "
+                           "saved as that episode's own map files, to copy over a DOS install.");
+        ImGui::PopStyleColor();
+        ImGui::Dummy(ImVec2(1, 2 * u));
+        if (start_button(ICON_CREATE_NEW_FOLDER "  New DOS episode", ImVec2(half, 0), true)) open_now = "New DOS episode";
+        ImGui::SameLine();
+        if (start_button(ICON_FOLDER_OPEN "  Open a DOS episode", ImVec2(half, 0), false)) open_now = "Open a DOS episode";
+    }
+    card_end(&need[1], tallest);
+    ImGui::PopStyleVar(2);
     ImGui::EndDisabled();
     if (open_now) ImGui::OpenPopup(open_now);
 
-    /* recent projects, and unsaved work */
-    ImGui::Spacing();
+    /* unsaved work */
     if (ok && path_exists(untitled_autosave())) {
-        ImGui::TextColored(T.warn, "A new project was left unsaved when Shrapnel last closed.");
+        ImGui::Dummy(ImVec2(1, 10 * u));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(T.warn.x, T.warn.y, T.warn.z, theme_dark ? 0.12f : 0.10f));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(T.warn.x, T.warn.y, T.warn.z, 0.6f));
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8 * u);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16 * u, 10 * u));
+        ImGui::BeginChild("##unsaved", ImVec2(W, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(T.warn, ICON_WARNING_FILLED);
         ImGui::SameLine();
-        if (ImGui::SmallButton("Recover it")) { proj = Project(); restore_autosave(); }
+        ImGui::TextUnformatted("A new project was left unsaved when Shrapnel last closed.");
+        float bw = 110 * u;
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - bw * 2 - sp.x);
+        if (start_button("Recover it", ImVec2(bw, 0), true)) { proj = Project(); restore_autosave(); }
         ImGui::SameLine();
-        if (ImGui::SmallButton("Discard it")) path_remove(untitled_autosave());
+        if (ImGui::Button("Discard it", ImVec2(bw, 0))) path_remove(untitled_autosave());
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
     }
-    ImGui::Spacing();
-    ImGui::Text("Recent");
-    rule(W);
-    if (recent.empty()) ImGui::TextDisabled("Nothing yet.");
+
+    /* recent projects */
+    ImGui::Dummy(ImVec2(1, 18 * u));
+    start_heading("Recent");
+    ImGui::Dummy(ImVec2(1, 4 * u));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8 * u, 8 * u));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, T.panel);
+    ImGui::PushStyleColor(ImGuiCol_Border, T.border);
+    ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8 * u);
+    ImGui::BeginChild("##recent", ImVec2(W, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollbar);
+    if (recent.empty()) {
+        ImGui::Dummy(ImVec2(1, 4 * u));
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 12 * u);
+        ImGui::TextColored(T.muted, "Nothing yet. The projects you open will be listed here.");
+        ImGui::Dummy(ImVec2(1, 4 * u));
+    }
     ImGui::BeginDisabled(!ok);
+    float row_h = 32 * u, rw = ImGui::GetContentRegionAvail().x;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(sp.x, 2 * u));
+    ImGui::PushStyleVar(ImGuiStyleVar_SelectableTextAlign, ImVec2(0, 0.5f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(T.accent.x, T.accent.y, T.accent.z, theme_dark ? 0.16f : 0.10f));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(T.accent.x, T.accent.y, T.accent.z, theme_dark ? 0.26f : 0.18f));
     for (size_t i = 0; i < recent.size(); i++) {
         const std::string &r = recent[i];
-        bool there = path_exists(r);
+        bool there = path_exists(r), dir = path_is_dir(r), epi = path_ext(r) == ".epi";
+        const char *icon = dir ? ICON_FOLDER : epi ? ICON_STACKS : ICON_DESCRIPTION;
+        const char *kind = dir ? "DOS episode" : epi ? "Techbot episode" : "Techbot level";
         ImGui::PushID((int)i);
-        std::string label = path_name(r) + (path_is_dir(r) ? "   (DOS episode folder)" : "");
+        ImVec2 p = ImGui::GetCursorScreenPos();
         ImGui::BeginDisabled(!there);
-        if (ImGui::Selectable(label.c_str(), false, 0, ImVec2(W * 0.4f, 0))) open_path(r);
+        if (ImGui::Selectable("##r", false, 0, ImVec2(rw, row_h))) open_path(r);
+        bool hov = ImGui::IsItemHovered();
         ImGui::EndDisabled();
-        ImGui::SameLine(W * 0.42f);
-        ImGui::TextDisabled("%s%s", r.c_str(), there ? "" : "  (not found)");
+        if (there && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) ImGui::SetTooltip("%s", r.c_str());
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        float a = there ? 1.0f : 0.5f, ty = p.y + (row_h - ImGui::GetTextLineHeight()) / 2;
+        ImVec4 ic = there ? T.accent_text : T.muted;
+        if (hov) ic = T.accent_text;
+        dl->AddText(font_icons, font_icons->FontSize, ImVec2(p.x + 12 * u, p.y + (row_h - font_icons->FontSize) / 2),
+                    ImGui::GetColorU32(ImVec4(ic.x, ic.y, ic.z, a)), icon);
+        std::string name = path_name(r);
+        float nx = p.x + 44 * u;
+        dl->AddText(font_bold, font_bold->FontSize, ImVec2(nx, ty), ImGui::GetColorU32(ImVec4(T.text.x, T.text.y, T.text.z, a)), name.c_str());
+        float kx = nx + std::max(ImGui::CalcTextSize(name.c_str()).x + 12 * u, rw * 0.28f);
+        dl->AddText(ImVec2(kx, ty), ImGui::GetColorU32(ImVec4(T.muted.x, T.muted.y, T.muted.z, a)), there ? kind : "not found");
+        float px = kx + ImGui::CalcTextSize("Techbot episode").x + 24 * u, pr = p.x + rw - 12 * u;
+        std::string shown = fit_path(r, pr - px);
+        dl->AddText(ImVec2(pr - ImGui::CalcTextSize(shown.c_str()).x, ty), ImGui::GetColorU32(ImVec4(T.faint.x, T.faint.y, T.faint.z, a)), shown.c_str());
         ImGui::PopID();
     }
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(2);
     ImGui::EndDisabled();
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
     ImGui::EndGroup();
+    content_h = ImGui::GetItemRectSize().y;
+    if (!fits) ImGui::Dummy(ImVec2(1, margin));
 
     /* the choices */
     if (popup_begin("New level")) {
@@ -4338,8 +5378,10 @@ int main(int argc, char **argv)
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");
     SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
 #endif
+    int win_w = 1500, win_h = 900;
+    if (getenv("SHRAPNEL_WINDOW")) sscanf(getenv("SHRAPNEL_WINDOW"), "%dx%d", &win_w, &win_h);   /* (tests: another size) */
     SDL_Window *win = SDL_CreateWindow("Shrapnel", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                       1500, 900, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+                                       win_w, win_h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     main_win = win;
 #ifndef _WIN32
     if (win) {                                  /* window icon: the 16x16 pixel art doubled, pixel for pixel */
@@ -4407,6 +5449,8 @@ int main(int argc, char **argv)
         while (SDL_PollEvent(&e)) {
             ImGui_ImplSDL2_ProcessEvent(&e);
             if (e.type == SDL_QUIT) want_quit = true;
+            if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_LOST) app_focused = false;
+            if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) app_focused = true;
             if (e.type == SDL_WINDOWEVENT && e.window.event == SDL_WINDOWEVENT_CLOSE &&
                 e.window.windowID == SDL_GetWindowID(win)) want_quit = true;
         }
@@ -4445,6 +5489,7 @@ int main(int argc, char **argv)
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
+        for (int k = 0; k < N_SPOTS; k++) spot0[k] = spot1[k] = ImVec2(0, 0);   /* (marked again as drawn) */
         menu_bar();
         shortcuts();
         if (want_quit) {                        /* the close button, Alt+F4 or File > Quit */
@@ -4486,6 +5531,13 @@ int main(int argc, char **argv)
             keys_window(&keys_open, ui_scale, settings_save);
         }
         draw_prompts();
+        if (editing() && !tour_seen && tour_step < 0 && !keys_open &&
+            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+            tour_seen = true;                   /* the first project opened: the tour, once */
+            settings_save();
+            tour_start();
+        }
+        tour();
         {
             char title[160];
             if (editing())
@@ -4501,6 +5553,16 @@ int main(int argc, char **argv)
          * ImGui backend scales only its clip rectangles itself) */
         SDL_RenderSetScale(ren, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), ren);
+        static int shot_every = getenv("SHRAPNEL_SHOT_EVERY") ? atoi(getenv("SHRAPNEL_SHOT_EVERY")) : 0;
+        if (shot && shot_every > 0 && frame < shot_at && frame % shot_every == 0) {   /* (tests: a sequence, shot_NNNNN.bmp) */
+            int w, h;
+            char name[600];
+            snprintf(name, sizeof name, "%s_%05d.bmp", shot, frame);
+            SDL_GetRendererOutputSize(ren, &w, &h);
+            SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+            if (s && SDL_RenderReadPixels(ren, NULL, SDL_PIXELFORMAT_ARGB8888, s->pixels, s->pitch) == 0) SDL_SaveBMP(s, name);
+            SDL_FreeSurface(s);
+        }
         if (shot && frame == shot_at) {
             int w, h;
             SDL_GetRendererOutputSize(ren, &w, &h);
