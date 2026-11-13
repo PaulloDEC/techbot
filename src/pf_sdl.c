@@ -520,6 +520,38 @@ static void draw_picture_art(const Layout *L)
         src.w = (int)(pic_art->w * dw / wd + 0.5); src.x = (pic_art->w - src.w) / 2;
         dst.x = 0; dst.w = dw;
     } else { dst.w = (int)(wd + 0.5); dst.x = (dw - dst.w) / 2; }
+    if (cfg.scaling == SCALE_SHARP && pic_art->game_pixels && sharp_ok) {
+        /* Sharp, as for the game's own picture: whole-number enlargement
+         * (every art pixel the same block), then a smooth shrink to size */
+        static SDL_Texture *pt;
+        static int ptw, pth;
+        int kx = (int)ceil((double)dst.w / src.w - 1e-6), ky = (int)ceil((double)dst.h / src.h - 1e-6), tw, th;
+        if (kx < 1) kx = 1;
+        if (ky < 1) ky = 1;
+        tw = src.w * kx; th = src.h * ky;
+        if ((dst.w != src.w * kx || dst.h != src.h * ky)) {
+            if (!pt || tw > ptw || th > pth) {
+                if (pt) SDL_DestroyTexture(pt);
+                ptw = tw > ptw ? tw : ptw; pth = th > pth ? th : pth;
+                pt = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_TARGET, ptw, pth);
+#if SDL_VERSION_ATLEAST(2, 0, 12)
+                if (pt) SDL_SetTextureScaleMode(pt, SDL_ScaleModeLinear);
+#endif
+            }
+            if (pt && SDL_SetRenderTarget(ren, pt) == 0) {
+                SDL_Rect big = { 0, 0, tw, th };
+                SDL_SetRenderDrawColor(ren, 0, 0, 0, 0);
+                SDL_RenderClear(ren);
+                SDL_SetTextureBlendMode(t, SDL_BLENDMODE_NONE);
+                SDL_RenderCopy(ren, t, &src, &big);
+                SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+                SDL_SetRenderTarget(ren, NULL);
+                SDL_SetTextureBlendMode(pt, SDL_BLENDMODE_BLEND);
+                SDL_RenderCopy(ren, pt, &big, &dst);
+                return;
+            }
+        }
+    }
     SDL_RenderCopy(ren, t, &src, &dst);
 }
 
