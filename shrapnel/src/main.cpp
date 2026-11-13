@@ -4020,6 +4020,30 @@ static void draw_logo(float w)
         for (size_t i = 0; i < logo_px.size(); i++)
             logo_px[i] = (uint32_t)px[i * 4 + 3] << 24 | (uint32_t)px[i * 4] << 16 | (uint32_t)px[i * 4 + 1] << 8 | px[i * 4 + 2];
         stbi_image_free(px);
+        /* the see-through pixels take their opaque neighbours' colour (still
+           see-through): smoothing mixes a pixel with its neighbours, colour and
+           all, so the edges would otherwise pick up the see-through pixels'
+           own colour (white, in the PNG) as a pale outline */
+        std::vector<uint8_t> known(logo_px.size());
+        for (size_t i = 0; i < logo_px.size(); i++) known[i] = (logo_px[i] >> 24) != 0;
+        for (int pass = 0; pass < 2; pass++) {  /* (two rings out from the edges) */
+            std::vector<uint32_t> was = logo_px;
+            std::vector<uint8_t> k0 = known;
+            for (int y = 0; y < logo_h; y++)
+                for (int x = 0; x < logo_w; x++) {
+                    size_t i = (size_t)y * logo_w + x;
+                    if (k0[i]) continue;
+                    int n = 0, r = 0, g = 0, b = 0;
+                    for (int dy = -1; dy <= 1; dy++)
+                        for (int dx = -1; dx <= 1; dx++) {
+                            int X = x + dx, Y = y + dy;
+                            if (X < 0 || Y < 0 || X >= logo_w || Y >= logo_h || !k0[(size_t)Y * logo_w + X]) continue;
+                            uint32_t c = was[(size_t)Y * logo_w + X];
+                            n++; r += (c >> 16) & 255; g += (c >> 8) & 255; b += c & 255;
+                        }
+                    if (n) { logo_px[i] = (uint32_t)(r / n) << 16 | (uint32_t)(g / n) << 8 | (uint32_t)(b / n); known[i] = 1; }
+                }
+        }
         make_texture(&logo_tex, logo_w, logo_h);
         SDL_UpdateTexture(logo_tex, NULL, logo_px.data(), logo_w * 4);
     }
