@@ -5447,8 +5447,25 @@ int main(int argc, char **argv)
         SDL_GetRendererOutputSize(ren, &dw, &dh);
         if (ww > 0) fb_scale = (float)dw / ww;
         if (const char *f = getenv("SHRAPNEL_TEST_FBS")) fb_scale = (float)atof(f);   /* (test aid: a scaled display, on one that isn't; see below) */
+        /* the system's own scaling, when it doesn't come through as more
+           pixels: on Windows, the display's DPI is the scaling setting
+           (96 = 100%); on Linux, the desktop's GDK_SCALE / GDK_DPI_SCALE if it
+           sets them.  (Not the screen's physical DPI, which Linux reports: a
+           1080p laptop screen is ~150 DPI but its desktop is at 100%.) */
+#ifdef _WIN32
         if (fb_scale < 1.01f && SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(win), &ddpi, NULL, NULL) == 0 && ddpi > 110)
             ui_scale = floorf(ddpi / 96 * 4 + 0.5f) / 4;      /* no OS scaling: scale the interface ourselves */
+#elif !defined(__APPLE__)
+        (void)ddpi;
+        if (fb_scale < 1.01f) {
+            float g = 1;
+            if (const char *e = getenv("GDK_SCALE")) g *= std::max(1.0f, (float)atof(e));
+            if (const char *e = getenv("GDK_DPI_SCALE")) g *= std::max(0.5f, (float)atof(e));
+            ui_scale = floorf(g * 4 + 0.5f) / 4;
+        }
+#else
+        (void)ddpi;
+#endif
         if (const char *u = getenv("SHRAPNEL_UI_SCALE")) {     /* (test aid: screenshots at 200%) */
             ui_scale = (float)atof(u);
             SDL_SetWindowSize(win, (int)(1500 * ui_scale), (int)(900 * ui_scale));

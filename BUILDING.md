@@ -759,7 +759,11 @@ the keys as they are.  The mouse modifiers (Shift and Alt with the tools,
 Space to pan) and the play-test keys (F2, F3, F4, F10) stay as they are.
 
 **View > Interface size** makes everything bigger or smaller than your
-display's own scaling (60% to 200%).  **View > Theme** switches between a dark and a light look and sets the
+display's own scaling (60% to 200%).  That scaling is the system's setting:
+on Windows and macOS what the display reports, on Linux the extra pixels a
+scaled desktop gives (Wayland) or `GDK_SCALE` / `GDK_DPI_SCALE` if the
+desktop sets them - never the screen's physical DPI, so a 1080p laptop at
+100% gets 100%.  **View > Theme** switches between a dark and a light look and sets the
 accent colour: seven presets or your own (a colour wheel).  Both are kept in
 `settings.txt`.  The interface uses Inter (SIL Open Font License) and
 Google's Material Symbols icons (Apache 2.0), built in; the licences are in
