@@ -17,6 +17,8 @@ struct ThemeColors {
 };
 extern ThemeColors T;
 extern bool theme_dark;
+extern bool theme_hc;                           /* accessibility: high contrast */
+extern bool theme_cb;                           /* accessibility: colours told apart with any colour vision (blue / orange / vermilion) */
 extern uint32_t theme_accent;                   /* 0xRRGGBB */
 extern ImFont *font_body, *font_bold, *font_icons;   /* text (with icons), headings, icon buttons */
 extern ImFont *font_tb, *font_tb_bold, *font_icons_lg;   /* the toolbar's: a size up */

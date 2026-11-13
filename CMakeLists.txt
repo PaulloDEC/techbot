@@ -78,7 +78,7 @@ if(SDL2_FOUND)
     # Shrapnel, the level editor (C++ / Dear ImGui), linking the same core
     set(IMGUI_DIR shrapnel/third_party/imgui)
     add_executable(shrapnel WIN32
-        shrapnel/src/main.cpp shrapnel/src/episode.cpp shrapnel/src/tile_names.cpp shrapnel/src/selftest.cpp shrapnel/src/catalog.cpp shrapnel/src/picture.cpp shrapnel/src/theme.cpp
+        shrapnel/src/main.cpp shrapnel/src/episode.cpp shrapnel/src/tile_names.cpp shrapnel/src/selftest.cpp shrapnel/src/catalog.cpp shrapnel/src/picture.cpp shrapnel/src/theme.cpp shrapnel/src/keys.cpp shrapnel/src/prefabs.cpp shrapnel/src/prefab_builtin.cpp
         shrapnel/src/tools.cpp shrapnel/src/doc.cpp shrapnel/src/filedlg.cpp shrapnel/src/project.cpp shrapnel/src/checks.cpp
         shrapnel/src/pf_shrapnel.c shrapnel/src/pf_sdl_embed.c
         ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp

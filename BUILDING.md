@@ -694,6 +694,22 @@ size); the sizes are kept in `settings.txt`.  The status bar describes the cell 
 13 x 10 tiles, which is how the game shows them with the camera at those
 positions (in play they stay fixed to the screen).
 
+**View > Accessibility** has **High contrast** (full-strength text and edges,
+plainer surfaces, in either theme), **Colour-blind safe colours** (results
+and the Reach overlay in blue, orange and vermilion instead of green, amber
+and red) and **Animate tiles and actors** (off: everything holds still).
+Results never rely on colour alone: a broken cell is flagged at two corners,
+a warning at one, a note with a dot; the level list shows an icon; cells
+where Duke gets stuck are hatched.  All three are kept in `settings.txt`.
+
+**Edit > Keyboard shortcuts** changes the keys: click a key, press the new
+one (with Ctrl, Shift or Alt if you like).  Each action can have two; a key
+already in use moves to the new action; right-click clears one, the arrow
+beside a row restores the usual, **Reset all** all of them.  Changes are
+kept in `settings.txt` (`key.undo = Ctrl+Z, none`), and menus and tips show
+the keys as they are.  The mouse modifiers (Shift and Alt with the tools,
+Space to pan) and the play-test keys (F2, F3, F4, F10) stay as they are.
+
 **View > Interface size** makes everything bigger or smaller than your
 display's own scaling (60% to 200%).  **View > Theme** switches between a dark and a light look and sets the
 accent colour: seven presets or your own (a colour wheel).  Both are kept in
@@ -706,12 +722,12 @@ Google's Material Symbols icons (Apache 2.0), built in; the licences are in
 | Tool | Key | |
 |---|---|---|
 | Select | `M` | drag a rectangle; Shift adds to the selection, Alt removes |
-| Move | `V` | drag the selection somewhere else (outside it: the actor whose picture is under the mouse - any part of it, outlined as you hover - else the cell); Shift: move a copy.  What's left behind is backdrop (an actor's cell: what the game shows there); locked cells stay put |
+| Move | `V` | drag the selection somewhere else (outside it: the actor whose picture is under the mouse - any part of it, outlined as you hover - else the cell); Shift: move a copy; the arrow keys nudge the selection a cell (Shift: four).  What's left behind is backdrop (an actor's cell: what the game shows there); locked cells stay put |
 | Magic select | `W` | click: the connected area of the same tile; Shift adds, Alt removes |
-| Pencil | `B` | paint the brush; Alt-click picks up the tile under the cursor |
-| Eraser | `E` | paint backdrop A (or B, chosen on the brush card) |
-| Line | `L` | drag a straight line |
-| Rectangle | `R` | drag a rectangle, outlined or filled (the *Filled* chip on the toolbar) |
+| Pencil | `B` | paint the brush; Shift-click: a straight line from the last cell painted; Alt-click picks up the tile under the cursor |
+| Eraser | `E` | paint backdrop A (or B, chosen on the brush card); Shift-click as the Pencil |
+| Line | `L` | drag a straight line; Shift: across, down or diagonal only |
+| Rectangle | `R` | drag a rectangle, outlined or filled (the *Filled* chip on the toolbar); Shift: a square |
 | Fill | `G` | fill the connected area of the same tile; Shift-click: every matching tile in the level |
 | Pick | `I` | click to take a tile or actor as the brush (anywhere on an actor's picture takes the actor) |
 
@@ -725,6 +741,8 @@ the objects sheet: `tools/tile_names.py DN1_objects.xlsx` remakes
 `shrapnel/src/tile_names.cpp` from it.  The **Backdrop** chip shows the open
 level's two backdrops as pictures.
 
+The keys below are the usual ones; Edit > Keyboard shortcuts changes them.
+
 | Command | Keys |
 |---|---|
 | Undo / redo | `Ctrl+Z` / `Ctrl+Y` (or `Ctrl+Shift+Z`) |
@@ -732,7 +750,9 @@ level's two backdrops as pictures.
 | Duplicate | `Ctrl+D` - a copy of the selection one cell down and right |
 | Delete | `Del` - the selection becomes backdrop |
 | Flip horizontal / vertical | `Shift+H` / `Shift+J` (or the Edit menu) - the selection mirrored where it is; facing actors turn round (tiles aren't redrawn: DN1 has no mirrored ones) |
-| Select all / none | `Ctrl+A` / `Esc` |
+| Select all / none / invert | `Ctrl+A` / `Esc` / `Ctrl+Shift+I` |
+| Previous brush | `X` - swap back to the brush before this one (and again to return) |
+| Hide the side panels | `Tab` (or *View > Side panels*) - the map across the window |
 | Find and replace | `Ctrl+F` - select or replace every cell holding a value |
 | Save / save as / open | `Ctrl+S` / `Ctrl+Shift+S` / `Ctrl+O` |
 
@@ -838,6 +858,39 @@ round).  What is checked:
 | Sets | keys with locks and key doors of the same colour; the card with a card reader; vertical force fields with both; horizontal force fields with a reactor; the hand reader with the robot hand (which Duke keeps from level to level) and the walkway; teleporters in pairs; conveyor starts with an end after them on the same row; the walkway with a stop tile (2FE0h) to its right; the bridge with a wall an odd number of cells away (it is laid two cells at a time) |
 | Placing | biters with a wall on the side they cling to; down spikes under a ceiling; floor spikes, up spikes and rockets on a floor; flamethrowers and fans not facing straight into a wall; the exit, teleporters, helicopters and Dr. Proton clear of walls; things that fall show where they land, or fall off the map |
 | Limits | each of the game's actor tables within what it holds |
+
+### Prefabs
+
+A prefab is a piece of level to place again: a room, a key door, a trap.
+Select it (Select or Magic select), then **Save the selection as a prefab**
+(the **Prefabs** tab beside Tiles and Actors, or *Edit*) and name it.  Tick
+what it takes from the selection - walls, background, backdrop cells,
+actors - to leave the rest out (the prefab is trimmed to what's left; the
+choice is kept for the next one).  Click
+a prefab to pick it up, then click on the map to place it, like a paste (the
+mirror and flip keys work on it, Esc puts it back).  Right-click one of your
+own to rename or delete it.
+
+Your prefabs are files in Shrapnel's settings folder (`prefabs/*.prefab`,
+plain text; **Open the prefabs folder** at the bottom of the tab), so they
+can be copied to share them.  When a selection is still exactly a piece of
+one of the game's own levels at the same place, the file says so
+(`from = WORLDAL3.DN1 12 40`).
+
+The prefabs that come with Shrapnel are made from such files by
+`tools/prefab_pack.py <game folder> <prefab files or folders>`, which writes
+`shrapnel/src/prefab_builtin.cpp`.  One cut from a game level keeps only
+where to cut it (the tool checks the cells against the game folder first),
+and Shrapnel cuts it from the player's own game files when it starts; one
+drawn from scratch keeps its cells.  So no part of the game's levels is
+shipped, and a prefab cut from an episode the player doesn't have isn't
+shown.
+
+### The example level
+
+**Open the example level** on the start screen opens a small finished level
+(by PaulloDEC; `shrapnel/resources/example.lev`) as a new project: play it,
+take it apart, and Save asks where to keep your copy.
 
 ### A catalog of tiles and actors
 

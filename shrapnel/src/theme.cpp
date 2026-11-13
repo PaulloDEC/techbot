@@ -18,6 +18,7 @@
 #include "../third_party/fonts/symbols_filled.h"
 
 ThemeColors T;
+bool theme_hc, theme_cb;
 bool theme_dark = true;
 uint32_t theme_accent = 0x2BC4B4;
 ImFont *font_body, *font_bold, *font_icons;
@@ -171,6 +172,29 @@ void theme_apply(float ui_scale)
         c[ImGuiCol_TableBorderLight] = rgb(0xE6E9ED);
         c[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0); c[ImGuiCol_TableRowBgAlt] = ImVec4(0, 0, 0, 0.025f);
         c[ImGuiCol_ModalWindowDimBg] = ImVec4(0.1f, 0.12f, 0.15f, 0.25f);
+    }
+    if (theme_cb) {                             /* (Okabe and Ito's palette: safe for the common colour blindnesses) */
+        if (theme_dark) { T.good = rgb(0x56B4E9); T.warn = rgb(0xE69F00); T.bad = rgb(0xFF7A3D); T.info = rgb(0xC9A0DC); }
+        else { T.good = rgb(0x0072B2); T.warn = rgb(0x8F6400); T.bad = rgb(0xC24A00); T.info = rgb(0x8E4C9E); }
+    }
+    if (theme_hc) {                             /* high contrast: full-strength words and edges, plainer surfaces */
+        if (theme_dark) {
+            T.text = rgb(0xFFFFFF); T.muted = rgb(0xD0D6DE); T.faint = rgb(0xB4BCC8);
+            T.panel = rgb(0x000000); T.panel2 = rgb(0x0B0C0E); T.bar = rgb(0x000000); T.border = rgb(0x8A93A0);
+            c[ImGuiCol_FrameBg] = rgb(0x000000); c[ImGuiCol_Button] = rgb(0x1A1D22); c[ImGuiCol_ButtonHovered] = rgb(0x30353D);
+            c[ImGuiCol_PopupBg] = rgb(0x0B0C0E);
+        } else {
+            T.text = rgb(0x000000); T.muted = rgb(0x2B3038); T.faint = rgb(0x464D58);
+            T.panel = rgb(0xFFFFFF); T.panel2 = rgb(0xFFFFFF); T.bar = rgb(0xFFFFFF); T.border = rgb(0x4B5563);
+            c[ImGuiCol_FrameBg] = rgb(0xFFFFFF); c[ImGuiCol_Button] = rgb(0xFFFFFF); c[ImGuiCol_ButtonHovered] = rgb(0xE3E7EC);
+            c[ImGuiCol_PopupBg] = rgb(0xFFFFFF);
+        }
+        c[ImGuiCol_Text] = T.text; c[ImGuiCol_TextDisabled] = T.muted;
+        c[ImGuiCol_WindowBg] = T.panel; c[ImGuiCol_ChildBg] = T.panel2; c[ImGuiCol_MenuBarBg] = T.bar;
+        c[ImGuiCol_TitleBg] = c[ImGuiCol_TitleBgActive] = c[ImGuiCol_TitleBgCollapsed] = T.bar;
+        c[ImGuiCol_Border] = T.border; c[ImGuiCol_Separator] = T.border; c[ImGuiCol_TableBorderStrong] = T.border;
+        st.DisabledAlpha = 0.6f;
+        st.FrameBorderSize = st.WindowBorderSize = st.ChildBorderSize = st.PopupBorderSize = ImMax(1.0f, floorf(1.5f * ui_scale));
     }
     c[ImGuiCol_CheckMark] = T.accent;
     c[ImGuiCol_SliderGrab] = T.accent;              c[ImGuiCol_SliderGrabActive] = T.accent_text;

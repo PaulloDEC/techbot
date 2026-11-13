@@ -11,6 +11,7 @@
  * directly (ed_actor_look).
  */
 #include "shrapnel.h"
+#include "prefabs.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -252,6 +253,27 @@ int selftest_projects(Episode &ep)
     std::string T = tmp.u8string();
     auto fail = [&](const std::string &what) { printf("episode %d projects: %s\n", ep.number, what.c_str()); fails = 1; };
     auto stock = [&](int slot) { std::vector<uint16_t> m(ED_MAP_CELLS); read_map_file(game_path(ep.slot_file(slot).c_str()), m.data()); return m; };
+
+    {   /* prefabs: a piece of the first level with a hole, through its text and through a file */
+        checks++;
+        std::vector<uint16_t> m = stock(0);
+        Prefab a;
+        a.name = "Test = piece";
+        a.w = 7; a.h = 5;
+        for (int r = 0; r < a.h; r++)
+            for (int c = 0; c < a.w; c++) { a.v.push_back(m[(40 + r) * MAP_W + 20 + c]); a.on.push_back((r + c) % 3 != 0); }
+        for (int i = 0; i < a.w * a.h; i++) if (!a.on[i]) a.v[i] = 0;
+        Prefab b;
+        if (!prefab_parse(prefab_text(a), b) || b.name != a.name || b.w != a.w || b.h != a.h || b.v != a.v || b.on != a.on)
+            fail("prefab text round trip");
+        std::string pd = path_join(T, "prefabs");
+        if (!prefab_save(pd, a, err)) fail("prefab save: " + err);
+        prefabs_load(pd, [](const std::string &) { return std::string(); });
+        bool found = false;
+        for (const Prefab &c : prefabs) if (!c.builtin && c.name == a.name && c.v == a.v && c.on == a.on) found = true;
+        if (!found) fail("prefab file round trip");
+        prefabs.clear();
+    }
 
     /* the stock episode as a Techbot episode */
     Project p, q;

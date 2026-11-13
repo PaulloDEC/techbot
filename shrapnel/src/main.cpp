@@ -31,6 +31,10 @@
 #include "backends/imgui_impl_sdlrenderer2.h"
 #include "shrapnel.h"
 #include "theme.h"
+#include "keys.h"
+#include "prefabs.h"
+#include <set>
+#include <filesystem>
 #include "icon_data.h"
 
 extern "C" {                                /* Techbot's own platform layer, built in (pf_sdl_embed.c) */
@@ -58,16 +62,15 @@ static const int ATLAS_TILES = 0x3000 / 0x20;
 enum Tool { T_SELECT, T_MOVE, T_MAGIC, T_PENCIL, T_ERASER, T_LINE, T_RECT, T_FILL, T_PICK, N_TOOLS };
 static const struct { const char *name, *key, *help; } tool_info[N_TOOLS] = {
     { "Select",  "M", "Drag to select cells. Shift adds, Alt removes." },
-    { "Move",    "V", "Drag the selection somewhere else (or, outside it, the actor or cell under the mouse). Shift: a copy." },
+    { "Move",    "V", "Drag the selection somewhere else (or, outside it, the actor or cell under the mouse). Shift: a copy. Arrows nudge it." },
     { "Magic",   "W", "Click to select the connected area of the same tile. Shift adds, Alt removes." },
-    { "Pencil",  "B", "Paint the brush. Alt-click picks up a tile." },
-    { "Eraser",  "E", "Paint the backdrop." },
-    { "Line",    "L", "Drag a straight line of the brush." },
-    { "Rect",    "R", "Drag a rectangle of the brush (outlined or filled)." },
+    { "Pencil",  "B", "Paint the brush. Shift-click: a line from the last cell. Alt-click picks up a tile. X: the brush before." },
+    { "Eraser",  "E", "Paint the backdrop. Shift-click: a line from the last cell." },
+    { "Line",    "L", "Drag a straight line of the brush. Shift: across, down or diagonal." },
+    { "Rect",    "R", "Drag a rectangle of the brush (outlined or filled). Shift: a square." },
     { "Fill",    "G", "Fill the connected area of the same tile. Shift fills every matching tile." },
     { "Pick",    "I", "Click to pick up a tile or actor as the brush." },
 };
-static const ImGuiKey tool_keys[N_TOOLS] = { ImGuiKey_M, ImGuiKey_V, ImGuiKey_W, ImGuiKey_B, ImGuiKey_E, ImGuiKey_L, ImGuiKey_R, ImGuiKey_G, ImGuiKey_I };
 
 static struct {
     double x = 0, y = 0;                    /* world pixel at the canvas's top-left */
@@ -90,6 +93,8 @@ static struct {
     int stroke_cells = 0, stroke_walled = 0;
     int sc0, sr0, sc1, sr1;                 /* stroke's changed area */
     bool told_mirror = false;
+    uint16_t prev_brush = 0x0600;           /* the brush before this one (X swaps them) */
+    int paint_c = -1, paint_r = -1;         /* the last cell the Pencil or Eraser painted (Shift+click: a line from it) */
 
     std::vector<int32_t> under = std::vector<int32_t>(ED_MAP_CELLS, -1);   /* what a cell held before an actor was put on it (this session) */
     bool shifting = false;                  /* the Move tool dragging cells (lifted, below) */
@@ -252,6 +257,7 @@ static void map_changed(int c0, int r0, int c1, int r1)
 
 static void recount(bool warn);
 static bool checks_dirty;                   /* the level checks need running again */
+static bool checks_ever;                    /* they have run at all on this project */
 /* Checks run as you edit (the rules after each change, the reachability
  * search and the recorded clear once the map settles), or only when asked:
  * Check (F7) runs all three, and Shrapnel reminds you now and then */
@@ -321,6 +327,10 @@ static bool bad_folder;                     /* no DN1/2/3.EXE in the game folder
 static std::vector<std::vector<Check>> checks;   /* per project entry */
 static bool show_notes, prompt_dos_save, dos_save_forced;
 static bool prompt_settings;                /* File > Project settings */
+static bool panels_hidden;
+static bool keys_open;                      /* Edit > Keyboard shortcuts */
+static bool prompt_prefab;                  /* Edit > Save selection as prefab */
+static bool prefab_take[4] = { true, true, true, true };   /* what a prefab takes: walls, background, backdrop cells, actors */                  /* Tab: the side panels hidden, the map wider */
 static bool note_win;                       /* the level's message, in its own window */
 static inline bool shows_message(uint16_t v) { return v == 0x3040 || v == 0x3041; }   /* note monitor, Dr. Proton screen */
 static bool drawer_open;                    /* the Checks / History drawer under the map */
@@ -471,6 +481,7 @@ static void recheck_all(void)               /* every level: the context of each 
         std::stable_sort(checks[cur].begin(), checks[cur].end(), [](const Check &a, const Check &b) { return a.sev > b.sev; });
     }
     checks_dirty = false;
+    checks_ever = true;
     unchecked = 0;
 }
 static bool checks_stale(void) { return checks_manual && checks_dirty; }
@@ -563,6 +574,8 @@ static void settings_save(void)
     fprintf(f, "accent = %06X\n", theme_accent & 0xFFFFFF);
     fprintf(f, "sidebar = %d\npalette = %d\ndrawer = %d\n", (int)side_w, (int)right_w, (int)drawer_hu);
     fprintf(f, "ui_size = %d\n", (int)(ui_user * 100 + 0.5f));
+    fprintf(f, "high_contrast = %d\ncolour_safe = %d\nanimate = %d\n", theme_hc, theme_cb, view.animate);
+    keys_save(f);
     fclose(f);
 }
 static void settings_load(void)
@@ -578,6 +591,10 @@ static void settings_load(void)
         else if (!strncmp(b, "palette", 7) && strchr(b, '=')) right_w = (float)atof(strchr(b, '=') + 1);
         else if (!strncmp(b, "drawer", 6) && strchr(b, '=')) drawer_hu = (float)atof(strchr(b, '=') + 1);
         else if (!strncmp(b, "ui_size", 7) && strchr(b, '=')) ui_user = std::max(0.5f, std::min(3.0f, (float)atof(strchr(b, '=') + 1) / 100));
+        else if (!strncmp(b, "high_contrast", 13) && strchr(b, '=')) theme_hc = atoi(strchr(b, '=') + 1) != 0;
+        else if (!strncmp(b, "colour_safe", 11) && strchr(b, '=')) theme_cb = atoi(strchr(b, '=') + 1) != 0;
+        else if (!strncmp(b, "animate", 7) && strchr(b, '=')) view.animate = atoi(strchr(b, '=') + 1) != 0;
+        else keys_load(b);                          /* key.<action> = ... */
     fclose(f);
 }
 static void run_check(void)                 /* Check (F7) */
@@ -593,7 +610,7 @@ static void set_checks_manual(bool on)
     checks_manual = on;
     settings_save();
     if (!on) say("Checks run as you edit again.");
-    else say("Checks now run when you press Check (F7). Shrapnel will remind you now and then.");
+    else say("Checks now run when you press Check (" + act_keys(A_CHECK) + "). Shrapnel will remind you now and then.");
 }
 
 static void recent_add(const std::string &p)
@@ -778,6 +795,8 @@ static bool use_project(Project &p, int first = 0)
     cur = -1;
     proj = std::move(p);
     hist = History();
+    checks.clear();
+    checks_ever = false;
     last_play.clear();
     open_entry(std::max(0, std::min(first, (int)proj.entries.size() - 1)));
     edits = 0;
@@ -1002,6 +1021,12 @@ static void do_flip(bool h)
 static char find_buf[8], repl_buf[8];
 
 static void project_details(void);
+static std::string value_text(uint16_t v);
+struct Prefab;
+static bool selection_prefab(Prefab &p);
+static void prefab_picture(const Prefab &p, float w, float most);
+static std::string prefab_dir(void);
+static void reload_prefabs(void);
 static bool level_has(uint16_t id);
 static void draw_prompts(void)
 {
@@ -1009,7 +1034,51 @@ static void draw_prompts(void)
     if (prompt_autosave) { ImGui::OpenPopup("Restore autosave?"); prompt_autosave = false; }
     if (prompt_replace) { ImGui::OpenPopup("Find and replace"); prompt_replace = false; }
     if (prompt_settings) { ImGui::OpenPopup("Project settings"); prompt_settings = false; }
+    static char prefab_name[64];
+    if (prompt_prefab) {
+        ImGui::OpenPopup("Save as a prefab");
+        prompt_prefab = false;
+        snprintf(prefab_name, sizeof prefab_name, "%s", "");
+    }
     ImVec2 c = ImGui::GetMainViewport()->GetCenter();
+
+    ImGui::SetNextWindowPos(c, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(420 * ui_scale, 0));
+    if (ImGui::BeginPopupModal("Save as a prefab", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+        static Prefab pf;
+        static bool any;
+        if (ImGui::IsWindowAppearing()) { any = selection_prefab(pf); ImGui::SetKeyboardFocusHere(); }
+        ImGui::TextUnformatted("Name it:");
+        ImGui::SetNextItemWidth(-1);
+        bool enter = ImGui::InputTextWithHint("##pfname", "e.g. Exit room, Key door, Spike pit", prefab_name, sizeof prefab_name,
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::Spacing();
+        ImGui::TextUnformatted("Take from the selection:");
+        static const char *const kinds[4] = { "Walls", "Background", "Backdrop cells", "Actors" };
+        for (int k = 0; k < 4; k++) {
+            if (k) ImGui::SameLine();
+            if (ImGui::Checkbox(kinds[k], &prefab_take[k])) any = selection_prefab(pf);
+        }
+        ImGui::Spacing();
+        if (!any) ImGui::TextColored(T.warn, "None of those in the selection.");
+        else prefab_picture(pf, ImGui::GetContentRegionAvail().x, 16 * ui_scale);
+        if (!pf.from.empty()) ImGui::TextDisabled("Cut from %s", pf.from.substr(0, pf.from.find(' ')).c_str());
+        ImGui::Spacing();
+        bool ok_name = prefab_name[0] != 0 && any;
+        ImGui::BeginDisabled(!ok_name);
+        if (ImGui::Button("Save", ImVec2(110 * ui_scale, 0)) || (enter && ok_name)) {
+            pf.name = prefab_name;
+            pf.file.clear();
+            std::string err;
+            if (prefab_save(prefab_dir(), pf, err)) { reload_prefabs(); say("Saved the prefab " + pf.name + " (in Prefabs, beside Tiles and Actors)"); }
+            else say(err);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(110 * ui_scale, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
 
     ImGui::SetNextWindowPos(c, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(460 * ui_scale, 0));
@@ -1129,14 +1198,14 @@ static void menu_bar(void)
     if (!ImGui::BeginMainMenuBar()) return;
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("Start screen...", NULL, false, editing())) guard_changes([] { close_project(); });
-        if (ImGui::MenuItem("Open project (.LEV, .EPI)...", "Ctrl+O", false, ep.number != 0)) guard_changes([] { open_project_dialog(); });
+        if (ImGui::MenuItem("Open project (.LEV, .EPI)...", act_keys(A_OPEN).c_str(), false, ep.number != 0)) guard_changes([] { open_project_dialog(); });
         if (ImGui::MenuItem("Open DOS episode folder...", NULL, false, ep.number != 0))
             guard_changes([] { std::string d = dialog_folder(last_dir, "Open a DOS episode folder"); if (!d.empty()) open_path(d); else say("Open: nothing chosen (on Linux this needs zenity)"); });
         ImGui::Separator();
-        if (ImGui::MenuItem("Save", "Ctrl+S", false, editing())) save_project();
-        if (ImGui::MenuItem(proj.dos ? "Save in another folder..." : "Save as...", "Ctrl+Shift+S", false, editing())) save_project_as();
+        if (ImGui::MenuItem("Save", act_keys(A_SAVE).c_str(), false, editing())) save_project();
+        if (ImGui::MenuItem(proj.dos ? "Save in another folder..." : "Save as...", act_keys(A_SAVE_AS).c_str(), false, editing())) save_project_as();
         if (ImGui::MenuItem("Convert to Techbot episode", NULL, false, editing() && proj.dos)) convert_to_techbot();
-        if (ImGui::MenuItem("Play in Techbot", "Ctrl+F5", false, editing())) play_in_techbot();
+        if (ImGui::MenuItem("Play in Techbot", act_keys(A_PLAY_TECHBOT).c_str(), false, editing())) play_in_techbot();
         if (ImGui::MenuItem("Revert to saved", NULL, false, editing() && !proj.untitled() && proj_modified()))
             guard_changes([] { std::string p = proj.path; open_path(p); });
         ImGui::Separator();
@@ -1147,41 +1216,45 @@ static void menu_bar(void)
     }
     if (ImGui::BeginMenu("Edit")) {
         bool ok = editing();
-        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, ok && hist.cur > 0)) do_undo();
-        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, ok && hist.cur + 1 < (int)hist.steps.size())) do_redo();
+        if (ImGui::MenuItem("Undo", act_keys(A_UNDO).c_str(), false, ok && hist.cur > 0)) do_undo();
+        if (ImGui::MenuItem("Redo", act_keys(A_REDO).c_str(), false, ok && hist.cur + 1 < (int)hist.steps.size())) do_redo();
         ImGui::Separator();
-        if (ImGui::MenuItem("Cut", "Ctrl+X", false, ok && sel.any)) do_cut();
-        if (ImGui::MenuItem("Copy", "Ctrl+C", false, ok && sel.any)) do_copy();
-        if (ImGui::MenuItem("Paste", "Ctrl+V", false, ok && !clip.empty())) do_paste();
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, ok && sel.any)) do_duplicate();
-        if (ImGui::MenuItem("Delete", "Del", false, ok && sel.any)) do_delete("Delete");
+        if (ImGui::MenuItem("Cut", act_keys(A_CUT).c_str(), false, ok && sel.any)) do_cut();
+        if (ImGui::MenuItem("Copy", act_keys(A_COPY).c_str(), false, ok && sel.any)) do_copy();
+        if (ImGui::MenuItem("Paste", act_keys(A_PASTE).c_str(), false, ok && !clip.empty())) do_paste();
+        if (ImGui::MenuItem("Duplicate", act_keys(A_DUPLICATE).c_str(), false, ok && sel.any)) do_duplicate();
+        if (ImGui::MenuItem("Delete", act_keys(A_DELETE).c_str(), false, ok && sel.any)) do_delete("Delete");
         ImGui::Separator();
-        if (ImGui::MenuItem("Flip horizontal", "Shift+H", false, ok && sel.any)) do_flip(true);
-        if (ImGui::MenuItem("Flip vertical", "Shift+J", false, ok && sel.any)) do_flip(false);
+        if (ImGui::MenuItem("Flip horizontal", act_keys(A_FLIP_H).c_str(), false, ok && sel.any)) do_flip(true);
+        if (ImGui::MenuItem("Flip vertical", act_keys(A_FLIP_V).c_str(), false, ok && sel.any)) do_flip(false);
         ImGui::Separator();
-        if (ImGui::MenuItem("Select all", "Ctrl+A", false, ok)) sel.all();
-        if (ImGui::MenuItem("Select none", "Esc", false, ok && sel.any)) sel.clear();
-        if (ImGui::MenuItem("Find and replace...", "Ctrl+F", false, ok)) {
+        if (ImGui::MenuItem("Select all", act_keys(A_SELECT_ALL).c_str(), false, ok)) sel.all();
+        if (ImGui::MenuItem("Select none", act_keys(A_DESELECT).c_str(), false, ok && sel.any)) sel.clear();
+        if (ImGui::MenuItem("Find and replace...", act_keys(A_FIND).c_str(), false, ok)) {
             snprintf(find_buf, sizeof find_buf, "%04X", ed.brush);
             snprintf(repl_buf, sizeof repl_buf, "%04X", ed.brush);
             prompt_replace = true;
         }
         ImGui::Separator();
+        if (ImGui::MenuItem("Save selection as prefab...", NULL, false, ok && sel.any)) prompt_prefab = true;
         if (ImGui::MenuItem("Level message...", NULL, false, ok)) note_win = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("Keyboard shortcuts...")) keys_open = true;
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
         if (ImGui::MenuItem("Actors", NULL, &view.actors)) redraw_all();
-        if (ImGui::MenuItem("Backdrop", "Ctrl+B", &compose_backdrop)) redraw_all();
+        if (ImGui::MenuItem("Backdrop", act_keys(A_BACKDROP).c_str(), &compose_backdrop)) redraw_all();
         ImGui::MenuItem("Labels", NULL, &view.labels);
-        ImGui::MenuItem("Grid", "Ctrl+G", &view.grid);
-        ImGui::MenuItem("Reach", "Ctrl+R", &show_reach);
+        ImGui::MenuItem("Grid", act_keys(A_GRID).c_str(), &view.grid);
+        ImGui::MenuItem("Reach", act_keys(A_REACH).c_str(), &show_reach);
         ImGui::Separator();
-        if (ImGui::MenuItem("Check now", "F7", false, editing())) run_check();
+        if (ImGui::MenuItem("Check now", act_keys(A_CHECK).c_str(), false, editing())) run_check();
         bool live = !checks_manual;
         if (ImGui::MenuItem("Check as you edit", NULL, &live)) set_checks_manual(!live);
-        ImGui::MenuItem("Animate", NULL, &view.animate);
+        if (ImGui::MenuItem("Animate", NULL, &view.animate)) settings_save();
         ImGui::MenuItem("Play-test path", NULL, &view.trail, !trail.empty());
+        if (ImGui::MenuItem("Side panels", act_keys(A_PANELS).c_str(), !panels_hidden)) panels_hidden = !panels_hidden;
         bool dr = drawer_open && drawer_tab == 0, hi = drawer_open && drawer_tab == 1;
         if (ImGui::MenuItem("Checks panel", NULL, dr, editing())) { drawer_open = !dr; drawer_tab = 0; }
         if (ImGui::MenuItem("History panel", NULL, hi, editing())) { drawer_open = !hi; drawer_tab = 1; }
@@ -1193,6 +1266,17 @@ static void menu_bar(void)
                 snprintf(l, sizeof l, pc == 100 ? "%d%% (your display's)" : "%d%%", pc);
                 if (ImGui::MenuItem(l, NULL, (int)(ui_user * 100 + 0.5f) == pc)) { ui_user = pc / 100.0f; ui_rescale = true; settings_save(); }
             }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Accessibility")) {
+            if (ImGui::MenuItem("High contrast", NULL, &theme_hc)) { theme_apply(ui_scale); settings_save(); }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Full-strength text and edges, plainer surfaces (dark or light)");
+            if (ImGui::MenuItem("Colour-blind safe colours", NULL, &theme_cb)) { theme_apply(ui_scale); settings_save(); }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("Results and the Reach overlay in blue, orange and vermilion instead of green, amber and red");
+            if (ImGui::MenuItem("Animate tiles and actors", NULL, &view.animate)) settings_save();
+            if (ImGui::MenuItem("Keyboard shortcuts...")) keys_open = true;
+            ImGui::TextDisabled("Interface size and theme: below");
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("Theme")) {
@@ -1229,45 +1313,51 @@ static void menu_bar(void)
 static void shortcuts(void)
 {
     ImGuiIO &io = ImGui::GetIO();
-    if (io.WantTextInput || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
+    if (io.WantTextInput || keys_capturing() || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return;
     if (!editing()) return;
-    auto chord = [](ImGuiKeyChord k) { return ImGui::IsKeyChordPressed(k); };
-    if (ImGui::IsKeyPressed(ImGuiKey_F7, false) && !io.KeyCtrl && !io.KeyAlt) run_check();
-    if (ImGui::IsKeyPressed(ImGuiKey_F4, false) && !io.KeyCtrl && !io.KeyAlt) {   /* play */
-        play_req.pending = true;
-        play_req.from_start = io.KeyShift;
+    /* (Edit > Keyboard shortcuts changes these: keys.cpp) */
+    if (act_pressed(A_CHECK)) run_check();
+    if (act_pressed(A_PLAY_HERE)) { play_req.pending = true; play_req.from_start = false; }
+    if (act_pressed(A_PLAY_START)) { play_req.pending = true; play_req.from_start = true; }
+    if (act_pressed(A_PLAY_TECHBOT)) play_in_techbot();
+    if (act_pressed(A_UNDO)) do_undo();
+    if (act_pressed(A_REDO)) do_redo();
+    if (act_pressed(A_SAVE)) save_project();
+    if (act_pressed(A_SAVE_AS)) save_project_as();
+    if (act_pressed(A_OPEN)) guard_changes([] { open_project_dialog(); });
+    if (act_pressed(A_COPY)) do_copy();
+    if (act_pressed(A_CUT)) do_cut();
+    if (act_pressed(A_PASTE)) do_paste();
+    if (act_pressed(A_DUPLICATE)) do_duplicate();
+    if (act_pressed(A_SELECT_ALL)) sel.all();
+    if (act_pressed(A_INVERT) && sel.any) {    /* invert the selection */
+        for (auto &b : sel.on) b = !b;
+        sel.update();
     }
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_Z)) do_undo();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_Y) || chord(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) do_redo();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_S)) save_project();
-    if (chord(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S)) save_project_as();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_O)) guard_changes([] { open_project_dialog(); });
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_C)) do_copy();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_X)) do_cut();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_V)) do_paste();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_D)) do_duplicate();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_A)) sel.all();
-    if (chord(ImGuiMod_Shift | ImGuiKey_H) && sel.any && !ed.floating) do_flip(true);
-    if (chord(ImGuiMod_Shift | ImGuiKey_J) && sel.any && !ed.floating) do_flip(false);
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_G)) view.grid = !view.grid;
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_B)) { compose_backdrop = !compose_backdrop; redraw_all(); }
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_R)) show_reach = !show_reach;
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_F5)) play_in_techbot();
-    if (chord(ImGuiMod_Ctrl | ImGuiKey_F)) {
+    if (act_pressed(A_GRID)) view.grid = !view.grid;
+    if (act_pressed(A_BACKDROP)) { compose_backdrop = !compose_backdrop; redraw_all(); }
+    if (act_pressed(A_REACH)) show_reach = !show_reach;
+    if (act_pressed(A_FIND)) {
         snprintf(find_buf, sizeof find_buf, "%04X", ed.brush);
         snprintf(repl_buf, sizeof repl_buf, "%04X", ed.brush);
         prompt_replace = true;
     }
-    if (io.KeyCtrl || io.KeyAlt) return;
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) do_delete("Delete");
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) { if (ed.floating) ed.floating = false; else sel.clear(); }
-    if (ed.floating) {
-        if (ImGui::IsKeyPressed(ImGuiKey_X, false)) flip_clip(true);
-        if (ImGui::IsKeyPressed(ImGuiKey_Y, false)) flip_clip(false);
+    if (act_pressed(A_DESELECT)) { if (ed.floating) ed.floating = false; else sel.clear(); }
+    if (ed.floating) {                          /* a paste following the mouse */
+        if (act_pressed(A_PASTE_MIRROR)) flip_clip(true);
+        if (act_pressed(A_PASTE_FLIP)) flip_clip(false);
         return;
     }
-    for (int t = 0; t < N_TOOLS; t++) if (ImGui::IsKeyPressed(tool_keys[t], false)) ed.tool = (Tool)t;
-    if (ImGui::IsKeyPressed(ImGuiKey_F, false) && cell_kind(ed.brush) == CK_ACTOR) {   /* face the other way */
+    if (act_pressed(A_DELETE)) do_delete("Delete");
+    if (act_pressed(A_FLIP_H) && sel.any) do_flip(true);
+    if (act_pressed(A_FLIP_V) && sel.any) do_flip(false);
+    for (int t = 0; t < N_TOOLS; t++) if (act_pressed((Act)(A_TOOL_SELECT + t))) ed.tool = (Tool)t;
+    if (act_pressed(A_PREV_BRUSH) && ed.prev_brush != ed.brush) {   /* back to the brush before */
+        std::swap(ed.brush, ed.prev_brush);
+        say("Brush: " + value_text(ed.brush) + "  (" + act_keys(A_PREV_BRUSH) + ": back to " + value_text(ed.prev_brush) + ")");
+    }
+    if (act_pressed(A_PANELS)) panels_hidden = !panels_hidden;   /* the map alone */
+    if (act_pressed(A_FACE) && cell_kind(ed.brush) == CK_ACTOR) {   /* face the other way */
         uint16_t f = actor_flip(ed.brush);
         if (f != ed.brush) { ed.brush = f; say(std::string("Brush: ") + actor_name(f)); }
         else say(std::string(actor_name(ed.brush)) + " has no other facing");
@@ -1497,9 +1587,10 @@ static void sidebar(float y0, float w, float h)
             (void)x0;
             if (i < (int)checks.size()) {           /* a dot for its worst check result, at the right */
                 int nb = check_count(checks[i], CS_BROKEN), nw = check_count(checks[i], CS_WARNING);
-                if (nb || nw) {
-                    float y = (r0.y + r1.y) / 2;
-                    dl->AddCircleFilled(ImVec2(r1.x - 8 * ui_scale, y), 3.5f * ui_scale, ImGui::GetColorU32(nb ? T.bad : T.warn));
+                if (nb || nw) {                 /* (an icon as well as a colour: broken, or a warning) */
+                    const char *ic = nb ? ICON_ERROR_FILLED : ICON_WARNING_FILLED;
+                    ImVec2 ts = ImGui::CalcTextSize(ic);
+                    dl->AddText(ImVec2(r1.x - ts.x - 2 * ui_scale, (r0.y + r1.y - ts.y) / 2 + 1), ImGui::GetColorU32(nb ? T.bad : T.warn), ic);
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("%d broken, %d warnings (see Checks)", nb, nw);
                 }
@@ -2148,7 +2239,7 @@ static void checks_body(void)
     const std::vector<Check> &v = cur < (int)checks.size() ? checks[cur] : std::vector<Check>();
     int nn = check_count(v, CS_NOTE);
     if (checks_stale())
-        ImGui::TextColored(T.warn, ICON_WARNING "  Out of date: the level changed since these were found. Check (F7) runs them again.");
+        ImGui::TextColored(T.warn, ICON_WARNING "  Out of date: the level changed since these were found. Check (%s) runs them again.", act_keys(A_CHECK).c_str());
     if (!nb_here && !nw_here) ImGui::TextColored(T.good, "%s: nothing broken, no warnings.", proj.label(cur).c_str());
     else ImGui::Text("%s: %d broken, %d warning%s.", proj.label(cur).c_str(), nb_here, nw_here, nw_here == 1 ? "" : "s");
     char nl[48];
@@ -2252,8 +2343,9 @@ static void history_body(void)
 
 static void play_body(void)
 {
-    ImGui::TextWrapped("F4 plays the level from the cell under the mouse (Duke drops to the floor below it); "
-                       "Shift+F4 from the player start. F4 again, dying or reaching the exit comes back here.");
+    ImGui::TextWrapped("%s plays the level from the cell under the mouse (Duke drops to the floor below it); "
+                       "%s from the player start. F4, dying or reaching the exit comes back here.",
+                       act_keys(A_PLAY_HERE).c_str(), act_keys(A_PLAY_START).c_str());
     if (ImGui::Button("Play in Techbot (Ctrl+F5)")) play_in_techbot();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("The whole %s in Techbot itself, from the start: its levels in order,\n"
@@ -2385,7 +2477,231 @@ static void note_window(void)
     ImGui::End();
 }
 
-static int pal_side;                        /* the palette: 0 tiles, 1 actors */
+/* ---- prefabs (prefabs.cpp) */
+static std::string prefab_dir(void) { return pref_dir() + "prefabs"; }
+static std::string prefab_game_file(const std::string &name)
+{
+    std::string p = game_path(name.c_str());
+    return path_exists(p) ? p : std::string();
+}
+static void reload_prefabs(void) { prefabs_load(prefab_dir(), prefab_game_file); }
+
+/* the selection as a prefab, and whether it is still exactly a piece of one
+ * of the game's levels at the same place (then the copy that comes with
+ * Shrapnel can be cut from the player's own files instead of shipped) */
+static bool taken(uint16_t v)
+{
+    switch (cell_kind(v)) {
+    case CK_SOLID: return prefab_take[0];
+    case CK_BACKGROUND: case CK_ANIMATED: return prefab_take[1];
+    case CK_BACKDROP_A: case CK_BACKDROP_B: return prefab_take[2];
+    case CK_ACTOR: return prefab_take[3];
+    default: return false;
+    }
+}
+
+static bool selection_prefab(Prefab &p)
+{
+    int c0, r0, c1, r1;
+    if (!sel.bounds(c0, r0, c1, r1)) return false;
+    Clip k;
+    k.copy(lv->map, sel);
+    p = Prefab();
+    /* only the kinds taken, and trimmed to them */
+    int a0 = k.w, b0 = k.h, a1 = -1, b1 = -1;
+    for (int r = 0; r < k.h; r++)
+        for (int c = 0; c < k.w; c++) {
+            int i = r * k.w + c;
+            if (k.on[i] && !taken(k.v[i])) k.on[i] = 0;
+            if (k.on[i]) { a0 = std::min(a0, c); b0 = std::min(b0, r); a1 = std::max(a1, c); b1 = std::max(b1, r); }
+        }
+    if (a1 < 0) return false;                   /* (nothing of those kinds) */
+    p.w = a1 - a0 + 1; p.h = b1 - b0 + 1;
+    for (int r = b0; r <= b1; r++)
+        for (int c = a0; c <= a1; c++) { p.v.push_back(k.on[r * k.w + c] ? k.v[r * k.w + c] : 0); p.on.push_back(k.on[r * k.w + c]); }
+    c0 += a0; r0 += b0;
+    std::set<std::string> seen;
+    for (int slot = 0; slot <= 20 && p.from.empty(); slot++) {
+        std::string f = ep.slot_file(slot);
+        if (f.empty() || !seen.insert(f).second) continue;
+        uint16_t m[ED_MAP_CELLS];
+        if (!read_map_file(game_path(f.c_str()), m)) continue;
+        bool same = true;
+        for (int r = 0; r < p.h && same; r++)
+            for (int c = 0; c < p.w && same; c++)
+                if (p.on[r * p.w + c] && m[(r0 + r) * MAP_W + c0 + c] != p.v[r * p.w + c]) same = false;
+        if (same) p.from = f + " " + std::to_string(c0) + " " + std::to_string(r0);
+    }
+    return true;
+}
+
+static void use_prefab(const Prefab &p)
+{
+    clip.w = p.w; clip.h = p.h; clip.v = p.v; clip.on = p.on;
+    build_clip_texture();
+    ed.floating = true;
+    say("Click to place " + p.name + ". " + act_keys(A_PASTE_MIRROR) + " / " + act_keys(A_PASTE_FLIP) + " mirror it, Esc cancels.");
+}
+
+/* a prefab's picture: drawn by the game's own code (actors in their cells,
+ * backdrop cells a flat shade), at its own size, then shrunk smoothly
+ * (each picture pixel the average of the ones it covers) to fit */
+static SDL_Texture *prefab_thumb(const Prefab &p, int tw, int th)
+{
+    static std::map<std::string, SDL_Texture *> cache;
+    std::string key = std::to_string(p.w) + "x" + std::to_string(p.h) + "@" + std::to_string(tw) + "," + std::to_string(th) + ":" +
+                      std::to_string(ep.number) + ":";
+    for (int i = 0; i < p.w * p.h; i++) { char b[8]; snprintf(b, sizeof b, "%04X%c", p.v[i], p.on[i] ? '+' : '-'); key += b; }
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+    if (cache.size() > 200) { for (auto &kv : cache) SDL_DestroyTexture(kv.second); cache.clear(); }
+    /* the prefab in an empty map (at 4, 4: room for actors drawn beyond their cell) */
+    static Level scratch;
+    static std::vector<uint32_t> px, bare;
+    px.assign((size_t)LEVEL_PX_W * LEVEL_PX_H, 0);
+    bare.assign((size_t)LEVEL_PX_W * LEVEL_PX_H, 0);
+    std::vector<uint16_t> m(ED_MAP_CELLS, 0);
+    const int X = 4, Y = 4;
+    for (int r = 0; r < p.h; r++)
+        for (int c = 0; c < p.w; c++)
+            if (p.on[r * p.w + c]) m[(Y + r) * MAP_W + X + c] = p.v[r * p.w + c];
+    scratch.load_map(ep, lv ? lv->slot : 0, m.data(), "prefab");
+    bool keep = compose_backdrop;
+    compose_backdrop = false;                   /* (backdrop cells: a flat shade, not the picture) */
+    compose_area(ep, scratch, 0, true, px.data(), X, Y, X + p.w, Y + p.h);
+    compose_area(ep, scratch, 0, false, bare.data(), X, Y, X + p.w, Y + p.h);   /* (without actors: to tell their pixels) */
+    compose_backdrop = keep;
+    if (lv) lv->refresh();                      /* (the game holds the open level again) */
+    int sw = p.w * 16, sh = p.h * 16;
+    std::vector<uint32_t> src((size_t)sw * sh);
+    for (int y = 0; y < sh; y++)
+        for (int x = 0; x < sw; x++) {
+            size_t at = (size_t)(Y * 16 + y) * LEVEL_PX_W + X * 16 + x;
+            uint32_t v = px[at];
+            if (!p.on[(y / 16) * p.w + x / 16] && v == bare[at]) v = 0;   /* not part of it: clear (but an actor drawn over it stays) */
+            src[(size_t)y * sw + x] = v;
+        }
+    std::vector<uint32_t> out((size_t)tw * th);
+    for (int y = 0; y < th; y++)                /* area average (with alpha), for any scale down */
+        for (int x = 0; x < tw; x++) {
+            double x0 = (double)x * sw / tw, x1 = (double)(x + 1) * sw / tw, y0 = (double)y * sh / th, y1 = (double)(y + 1) * sh / th;
+            double a = 0, rr = 0, gg = 0, bb = 0, n = 0;
+            for (int sy = (int)y0; sy < (int)ceil(y1) && sy < sh; sy++)
+                for (int sx = (int)x0; sx < (int)ceil(x1) && sx < sw; sx++) {
+                    double wgt = (std::min(x1, sx + 1.0) - std::max(x0, (double)sx)) * (std::min(y1, sy + 1.0) - std::max(y0, (double)sy));
+                    uint32_t v = src[(size_t)sy * sw + sx];
+                    double al = (v >> 24) / 255.0;
+                    a += al * wgt; rr += ((v >> 16) & 255) * al * wgt; gg += ((v >> 8) & 255) * al * wgt; bb += (v & 255) * al * wgt; n += wgt;
+                }
+            uint32_t o = 0;
+            if (a > 0) o = (uint32_t)(a / n * 255 + 0.5) << 24 | (uint32_t)(rr / a + 0.5) << 16 | (uint32_t)(gg / a + 0.5) << 8 | (uint32_t)(bb / a + 0.5);
+            out[(size_t)y * tw + x] = o;
+        }
+    SDL_Texture *t = NULL;
+    make_texture(&t, tw, th);
+    SDL_UpdateTexture(t, NULL, out.data(), tw * 4);
+    SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+    cache[key] = t;
+    return t;
+}
+
+/* a prefab's picture, as wide as `w` at most, cells at most `most` across */
+static void prefab_picture(const Prefab &p, float w, float most)
+{
+    float cell = std::min(most, w / p.w);
+    int tw = std::max(1, (int)(cell * p.w)), th = std::max(1, (int)(cell * p.h));
+    if (cell >= 16) { tw = p.w * 16; th = p.h * 16; }   /* (bigger than its own size: drawn up, crisp) */
+    SDL_Texture *t = prefab_thumb(p, tw, th);
+    ImGui::Image(tid(t), ImVec2(cell * p.w, cell * p.h));
+}
+
+static void pal_prefabs(void)
+{
+    static bool loaded;
+    if (!loaded) { reload_prefabs(); loaded = true; }
+    ImGui::BeginDisabled(!sel.any);
+    if (ImGui::Button(ICON_ADD " Save the selection as a prefab", ImVec2(-1, 0))) prompt_prefab = true;
+    ImGui::EndDisabled();
+    if (!sel.any && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Select part of the level first (Select or Magic select)");
+    ImGui::BeginChild("##prefabs", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    float w = ImGui::GetContentRegionAvail().x;
+    static int renaming = -1;
+    static char rename_buf[64];
+    bool any_mine = false, any_game = false;
+    for (int pass = 0; pass < 2; pass++) {      /* the user's first, then the ones that come with Shrapnel */
+        bool header = false;
+        for (int i = 0; i < (int)prefabs.size(); i++) {
+            Prefab &p = prefabs[i];
+            if (p.builtin != (pass == 1)) continue;
+            if (pass == 0) any_mine = true; else any_game = true;
+            if (pal_find[0] && !pal_match(p.name)) continue;
+            if (!header) { ImGui::Spacing(); section_label(pass ? "COME WITH SHRAPNEL" : "YOURS"); header = true; }
+            ImGui::PushID(i);
+            ImVec2 top = ImGui::GetCursorScreenPos();
+            prefab_picture(p, w - 8 * ui_scale, 20 * ui_scale);
+            if (renaming == i) {
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::IsWindowAppearing() || !ImGui::IsAnyItemActive()) ImGui::SetKeyboardFocusHere();
+                bool done = ImGui::InputText("##rn", rename_buf, sizeof rename_buf, ImGuiInputTextFlags_EnterReturnsTrue);
+                if (done || ImGui::IsItemDeactivated()) {
+                    std::string err, nm = rename_buf;
+                    if (!nm.empty() && nm != p.name && !prefab_rename(prefab_dir(), p, nm, err)) say(err);
+                    renaming = -1;
+                    reload_prefabs();
+                    ImGui::PopID();
+                    break;
+                }
+            } else ImGui::TextUnformatted(p.name.c_str());
+            ImVec2 bot = ImGui::GetCursorScreenPos();
+            ImGui::SetCursorScreenPos(top);
+            if (ImGui::InvisibleButton("##use", ImVec2(w, std::max(1.0f, bot.y - top.y - (renaming == i ? ImGui::GetFrameHeightWithSpacing() : 0)))))
+                use_prefab(p);
+            if (ImGui::IsItemHovered()) {
+                ImGui::GetWindowDrawList()->AddRect(ImVec2(top.x - 2, top.y - 2), ImVec2(top.x + w, bot.y), ImGui::GetColorU32(T.accent), 4 * ui_scale);
+                std::string cut = p.from.empty() ? "" : "\nCut from " + p.from.substr(0, p.from.find(' '));
+                ImGui::SetTooltip("%s: %d x %d%s\nClick, then click on the map to place it.%s", p.name.c_str(), p.w, p.h,
+                                  cut.c_str(), p.builtin ? "" : " Right-click: rename or delete.");
+            }
+            if (!p.builtin && ImGui::BeginPopupContextItem("##ctx")) {
+                if (ImGui::MenuItem("Rename")) { renaming = i; snprintf(rename_buf, sizeof rename_buf, "%s", p.name.c_str()); }
+                if (ImGui::MenuItem("Delete")) {
+                    std::string nm = p.name;
+                    prefab_remove(p);
+                    reload_prefabs();
+                    say("Deleted the prefab " + nm);
+                    ImGui::EndPopup();
+                    ImGui::PopID();
+                    break;
+                }
+                ImGui::EndPopup();
+            }
+            ImGui::SetCursorScreenPos(bot);
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+    }
+    if (!any_mine) {
+        ImGui::Spacing();
+        hint("Select part of a level (a room, a door with its key, a trap), then save it as a prefab to place it "
+             "again anywhere, in any project.");
+    }
+    if (!any_game && n_prefab_builtin > 0)
+        hint("The prefabs that come with Shrapnel are cut from the game's own levels, which aren't in this game folder.");
+    ImGui::Spacing();
+    if (ImGui::SmallButton(ICON_FOLDER_OPEN " Open the prefabs folder")) {
+        std::error_code ec;
+        std::filesystem::create_directories(std::filesystem::u8path(prefab_dir()), ec);
+        std::string u = "file:///" + prefab_dir();
+        for (char &ch : u) if (ch == '\\') ch = '/';
+        SDL_OpenURL(u.c_str());
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("Your prefabs are files there (%s): copy them to share them.", prefab_dir().c_str());
+    ImGui::EndChild();
+}
+
+static int pal_side;                        /* the palette: 0 tiles, 1 actors, 2 prefabs */
 static void right_panel(float x0, float y0, float w, float h)
 {
     ImGui::SetNextWindowPos(ImVec2(x0, y0));
@@ -2395,12 +2711,14 @@ static void right_panel(float x0, float y0, float w, float h)
     if (!editing()) { ImGui::End(); return; }
     static int side_aid = getenv("SHRAPNEL_TAB") && !strcmp(getenv("SHRAPNEL_TAB"), "Actors") ? 1 : 0;   /* (test aid: screenshots) */
     if (side_aid) { pal_side = 1; side_aid = 0; }
-    {   /* Tiles | Actors */
-        static const char *const sides[2] = { "Tiles", "Actors" };
-        segmented("##side", sides, 2, &pal_side);
+    {   /* Tiles | Actors | Prefabs */
+        static const char *const sides[3] = { "Tiles", "Actors", "Prefabs" };
+        segmented("##side", sides, 3, &pal_side);
     }
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##find", ICON_SEARCH "  Find a tile or actor", pal_find, sizeof pal_find);
+    ImGui::InputTextWithHint("##find", pal_side == 2 ? ICON_SEARCH "  Find a prefab" : ICON_SEARCH "  Find a tile or actor",
+                             pal_find, sizeof pal_find);
+    if (pal_side == 2) { pal_prefabs(); ImGui::End(); return; }
     brush_card();
     if (pal_side == 0) pal_tiles(w);
     else pal_actors();
@@ -2543,16 +2861,17 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
     ImGui::SetCursorPos(ImVec2(pad, tb_row_y));
     {   /* Play here, with its menu; From start */
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, text_pad);
-        if (split_button("Play here", ICON_PLAY_ARROW_FILLED, "##playmenu",
-                         "Play from the middle of the view (F4: from the cell under the mouse). F4 again comes back.",
+        std::string ph = "Play from the middle of the view (" + act_keys(A_PLAY_HERE) + ": from the cell under the mouse). F4 comes back.";
+        std::string ps = "Play from the player start (" + act_keys(A_PLAY_START) + "); reaching the end records a clear.";
+        if (split_button("Play here", ICON_PLAY_ARROW_FILLED, "##playmenu", ph.c_str(),
                          tb_large ? font_tb_bold : NULL))
             { play_req.pending = true; play_req.from_start = false; }
         bool go;
-        if (tb_large && from_icon) go = tb_icon(ICON_SKIP_PREVIOUS, "From start (Shift+F4): play from the player start; reaching the end records a clear.", false, true, apart);
+        if (tb_large && from_icon) go = tb_icon(ICON_SKIP_PREVIOUS, ("From start: " + ps).c_str(), false, true, apart);
         else {
             tb_place(tb_h, apart);
             go = ImGui::Button(from_label);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Play from the player start (Shift+F4); reaching the end records a clear.");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", ps.c_str());
         }
         if (go) { play_req.pending = true; play_req.from_start = true; }
         ImGui::PopStyleVar();
@@ -2572,7 +2891,7 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
     } else toolbar_sep();
     for (int t = 0; t < N_TOOLS; t++) {
         char tip[200];
-        snprintf(tip, sizeof tip, "%s (%s)\n%s", tool_info[t].name, tool_info[t].key, tool_info[t].help);
+        snprintf(tip, sizeof tip, "%s (%s)\n%s", tool_info[t].name, act_keys((Act)(A_TOOL_SELECT + t)).c_str(), tool_info[t].help);
         if (tb_icon(tool_icon[t], tip, ed.tool == t, true, t ? near : gap0)) { ed.tool = (Tool)t; ed.floating = false; }
     }
     if (tb_large) ImGui::PushFont(font_body);       /* (chips at the usual size) */
@@ -2627,6 +2946,22 @@ static void toolbar_window(float x0, float y0, float w, float h, float side, flo
     ImGui::End();
 }
 
+/* Shift while dragging a line or rectangle: a line snaps to across, down or
+ * a diagonal; a rectangle becomes a square (as in most painting programs) */
+static void shape_end(int &c, int &r)
+{
+    if (!ImGui::GetIO().KeyShift || (ed.tool != T_LINE && ed.tool != T_RECT)) return;
+    int dc = c - ed.drag_c, dr = r - ed.drag_r, ac = abs(dc), ar = abs(dr);
+    if (ed.tool == T_RECT || (ac && ar && ac * 2 > ar && ar * 2 > ac)) {   /* a square, or a diagonal */
+        int n = std::max(ac, ar);
+        c = ed.drag_c + (dc < 0 ? -n : n);
+        r = ed.drag_r + (dr < 0 ? -n : n);
+    } else if (ac >= ar) r = ed.drag_r;                /* across */
+    else c = ed.drag_c;                                /* down */
+    c = std::max(0, std::min(MAP_W - 1, c));
+    r = std::max(0, std::min(MAP_H - 1, r));
+}
+
 /* cells the line or rectangle being dragged would paint (for the preview) */
 static void shape_cells(std::vector<int> &out)
 {
@@ -2635,8 +2970,10 @@ static void shape_cells(std::vector<int> &out)
     static std::vector<uint16_t> scratch(ED_MAP_CELLS);
     std::fill(scratch.begin(), scratch.end(), 0);
     Edit e(scratch.data(), 0);
-    if (ed.tool == T_LINE) op_line(e, ed.drag_c, ed.drag_r, ed.last_c, ed.last_r, 1);
-    else op_rect(e, ed.drag_c, ed.drag_r, ed.last_c, ed.last_r, 1, ed.rect_filled);
+    int c = ed.last_c, r = ed.last_r;
+    shape_end(c, r);
+    if (ed.tool == T_LINE) op_line(e, ed.drag_c, ed.drag_r, c, r, 1);
+    else op_rect(e, ed.drag_c, ed.drag_r, c, r, 1, ed.rect_filled);
     for (int i = 0; i < ED_MAP_CELLS; i++) if (scratch[i]) out.push_back(i);
 }
 
@@ -2806,9 +3143,14 @@ static void tool_input(int c, int r, bool inside)
             }
             Edit e(lv->map, ed.locks);
             e.behind = t == T_PENCIL;           /* a tile painted over an actor goes behind it */
-            e.set(c, r, t == T_ERASER ? ed.erase : ed.brush);
-            e.finish_behind();
+            if (io.KeyShift && ed.paint_c >= 0)  /* Shift+click: a straight line from the last cell painted */
+                op_line(e, ed.paint_c, ed.paint_r, c, r, t == T_ERASER ? ed.erase : ed.brush);
+            else {
+                e.set(c, r, t == T_ERASER ? ed.erase : ed.brush);
+                e.finish_behind();
+            }
             stroke_add(e);
+            ed.paint_c = c; ed.paint_r = r;
             break;
         }
         case T_FILL: {
@@ -2860,6 +3202,7 @@ static void tool_input(int c, int r, bool inside)
             e.behind = t == T_PENCIL;
             op_line(e, ed.last_c, ed.last_r, c, r, t == T_ERASER ? ed.erase : ed.brush);
             stroke_add(e);
+            ed.paint_c = c; ed.paint_r = r;
         }
         ed.last_c = c;
         ed.last_r = r;
@@ -2876,12 +3219,14 @@ static void tool_input(int c, int r, bool inside)
         else if (t == T_PENCIL) stroke_end("Pencil");
         else if (t == T_ERASER) stroke_end("Eraser");
         else if (t == T_LINE) {
+            shape_end(c, r);
             Edit e(lv->map, ed.locks);
             e.behind = true;
             op_line(e, ed.drag_c, ed.drag_r, c, r, ed.brush);
             stroke_add(e);
             stroke_end("Line");
         } else if (t == T_RECT) {
+            shape_end(c, r);
             Edit e(lv->map, ed.locks);
             e.behind = true;
             op_rect(e, ed.drag_c, ed.drag_r, c, r, ed.brush, ed.rect_filled);
@@ -2934,15 +3279,34 @@ static void canvas(float x0, float y0, float w, float h)
             int zi = zoom_index() + (io.MouseWheel > 0 ? 1 : -1);
             if (zi >= 0 && zi < N_ZOOMS) zoom_at(ZOOMS[zi], ImVec2(io.MousePos.x - p.x, io.MousePos.y - p.y));
         }
-        if (!io.WantTextInput && !io.KeyCtrl) {
+        int n0, m0, n1, m1;
+        bool keys_ok = !io.WantTextInput && !keys_capturing() &&
+                       !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if (keys_ok && ed.tool == T_MOVE && !ed.dragging && sel.any && sel.bounds(n0, m0, n1, m1)) {
+            /* the Move tool and a selection: the pan keys nudge it a cell (Shift: four) */
+            int n = io.KeyShift ? 4 : 1, dc = 0, dr = 0;
+            if (act_pressed(A_PAN_LEFT)) dc = -n;
+            if (act_pressed(A_PAN_RIGHT)) dc = n;
+            if (act_pressed(A_PAN_UP)) dr = -n;
+            if (act_pressed(A_PAN_DOWN)) dr = n;
+            dc = std::max(-n0, std::min(MAP_W - 1 - n1, dc));
+            dr = std::max(-m0, std::min(MAP_H - 1 - m1, dr));
+            if (dc || dr) {
+                Clip cl;
+                cl.copy(lv->map, sel);
+                put_down(cl, n0 + dc, m0 + dr, false, "Nudged");
+            }
+        } else if (keys_ok) {
             double step = 64 / view.zoom * (io.KeyShift ? 4 : 1);
-            if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) view.x -= step;
-            if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) view.x += step;
-            if (ImGui::IsKeyPressed(ImGuiKey_UpArrow)) view.y -= step;
-            if (ImGui::IsKeyPressed(ImGuiKey_DownArrow)) view.y += step;
+            if (act_pressed(A_PAN_LEFT)) view.x -= step;
+            if (act_pressed(A_PAN_RIGHT)) view.x += step;
+            if (act_pressed(A_PAN_UP)) view.y -= step;
+            if (act_pressed(A_PAN_DOWN)) view.y += step;
+        }
+        if (keys_ok && !ed.floating) {
             for (int k = 0; k < 4; k++)
-                if (ImGui::IsKeyPressed((ImGuiKey)(ImGuiKey_1 + k))) zoom_at(k + 1, ImVec2(size.x / 2, size.y / 2));
-            if (ImGui::IsKeyPressed(ImGuiKey_0)) {               /* the whole level */
+                if (act_pressed((Act)(A_ZOOM1 + k))) zoom_at(k + 1, ImVec2(size.x / 2, size.y / 2));
+            if (act_pressed(A_ZOOM_ALL)) {               /* the whole level */
                 view.zoom = fmin(size.x / LEVEL_PX_W, size.y / LEVEL_PX_H);
                 view.x = -(size.x / view.zoom - LEVEL_PX_W) / 2;
                 view.y = -(size.y / view.zoom - LEVEL_PX_H) / 2;
@@ -3012,8 +3376,14 @@ static void canvas(float x0, float y0, float w, float h)
                     int k = r * MAP_W + c;
                     uint8_t f = reach.cell[k];
                     ImVec2 q = cell_pos(c, r), e(q.x + cell, q.y + cell);
-                    if (f & ED_REACH_TRAPPED) dl->AddRectFilled(q, e, IM_COL32(255, 40, 30, 95));
-                    else if (f & ED_REACH_BODY) dl->AddRectFilled(q, e, IM_COL32(60, 230, 90, 60));
+                    if (f & ED_REACH_TRAPPED) {     /* stuck: the "bad" colour, hatched (not colour alone) */
+                        dl->AddRectFilled(q, e, ImGui::GetColorU32(ImVec4(T.bad.x, T.bad.y, T.bad.z, 0.38f)));
+                        ImU32 hc = ImGui::GetColorU32(ImVec4(T.bad.x, T.bad.y, T.bad.z, 0.9f));
+                        dl->AddLine(ImVec2(q.x, e.y), ImVec2(e.x, q.y), hc, 1.0f);
+                        dl->AddLine(ImVec2(q.x, (q.y + e.y) / 2), ImVec2((q.x + e.x) / 2, q.y), hc, 1.0f);
+                        dl->AddLine(ImVec2((q.x + e.x) / 2, e.y), ImVec2(e.x, (q.y + e.y) / 2), hc, 1.0f);
+                    }
+                    else if (f & ED_REACH_BODY) dl->AddRectFilled(q, e, ImGui::GetColorU32(ImVec4(T.good.x, T.good.y, T.good.z, 0.25f)));
                     else if (cell_kind(lv->after[k]) != CK_SOLID) dl->AddRectFilled(q, e, IM_COL32(0, 0, 0, 130));
                     if (f & ED_REACH_SHOT) dl->AddRect(ImVec2(q.x + 1, q.y + 1), ImVec2(e.x - 1, e.y - 1), IM_COL32(255, 200, 60, 200), 0, 0, 1.0f);
                 }
@@ -3138,10 +3508,14 @@ static void canvas(float x0, float y0, float w, float h)
             for (const Check &k : checks[cur]) {
                 if (k.c < 0 || (k.sev == CS_NOTE && !show_notes)) continue;
                 ImVec2 q = cell_pos(k.c, k.r);
-                ImU32 col = k.sev == CS_BROKEN ? IM_COL32(235, 70, 55, 255) : k.sev == CS_WARNING ? IM_COL32(240, 170, 40, 255) : IM_COL32(110, 170, 240, 230);
+                /* the colour says how bad; so does the shape: broken flags two corners, a warning one, a note a dot */
+                ImU32 col = ImGui::GetColorU32(k.sev == CS_BROKEN ? T.bad : k.sev == CS_WARNING ? T.warn : T.info);
                 float t = std::max(6.0f, cell * 0.45f);
-                dl->AddTriangleFilled(q, ImVec2(q.x + t, q.y), ImVec2(q.x, q.y + t), col);
-                dl->AddRect(q, ImVec2(q.x + cell, q.y + cell), (col & 0x00FFFFFF) | 0x90000000, 0, 0, 1.0f);
+                ImVec2 e(q.x + cell, q.y + cell);
+                if (k.sev == CS_NOTE) dl->AddCircleFilled(ImVec2(q.x + t * 0.4f, q.y + t * 0.4f), t * 0.28f, col);
+                else dl->AddTriangleFilled(q, ImVec2(q.x + t, q.y), ImVec2(q.x, q.y + t), col);
+                if (k.sev == CS_BROKEN) dl->AddTriangleFilled(e, ImVec2(e.x - t, e.y), ImVec2(e.x, e.y - t), col);
+                dl->AddRect(q, e, (col & 0x00FFFFFF) | 0x90000000, 0, 0, k.sev == CS_BROKEN ? 2.0f : 1.0f);
             }
             if (focus_c >= 0 && now_s < focus_until) {  /* the one clicked in the panel */
                 ImVec2 q = cell_pos(focus_c, focus_r);
@@ -3239,7 +3613,7 @@ static void drawer(float x, float y, float w, float h)
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Check after every change (can slow big levels down)");
             ImGui::SameLine(0, 4 * ui_scale);
             if (chip("When asked", checks_manual) && !checks_manual) set_checks_manual(true);
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Check only with Check (F7), before saving and before playing");
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("Check only with Check (%s), before saving and before playing", act_keys(A_CHECK).c_str());
         }
         ImGui::SameLine(ImGui::GetWindowContentRegionMax().x - ImGui::GetFrameHeight());
         ImGui::SetCursorPosY(y0);
@@ -3277,12 +3651,14 @@ static void status_bar(float y0, float w, float h)
         if (nb) snprintf(badge, sizeof badge, ICON_ERROR_FILLED " %d broken%s", nb, nw ? "" : "");
         else if (nw) snprintf(badge, sizeof badge, ICON_WARNING_FILLED " %d warning%s", nw, nw == 1 ? "" : "s");
         else snprintf(badge, sizeof badge, ICON_TASK_ALT " No problems");
-        if (checks_stale()) strncat(badge, "  (out of date)", sizeof badge - strlen(badge) - 1);
+        if (!checks_ever) snprintf(badge, sizeof badge, ICON_TASK_ALT " Not checked yet");
+        else if (checks_stale()) strncat(badge, "  (out of date)", sizeof badge - strlen(badge) - 1);
         char zl[16];
         snprintf(zl, sizeof zl, "%d%%", (int)(view.zoom * 100 + 0.5));
         float bw = ImGui::CalcTextSize(badge).x + ImGui::GetStyle().FramePadding.x * 2;
         float zw = ImGui::GetFrameHeight() * 2 + ImGui::CalcTextSize("1000%").x + 8 * ui_scale;
-        const char *chk = ICON_TASK_ALT " Check (F7)";
+        std::string chk_s = ICON_TASK_ALT " Check" + (act_keys(A_CHECK).empty() ? std::string() : " (" + act_keys(A_CHECK) + ")");
+        const char *chk = chk_s.c_str();
         float cw0 = ImGui::CalcTextSize(chk).x + ImGui::GetStyle().FramePadding.x * 2;
         const char *path_lbl = ICON_VISIBILITY " Play-test path";
         float pw = trail.size() > 1 ? ImGui::CalcTextSize(path_lbl).x + ImGui::GetStyle().FramePadding.x * 2 + 14 * ui_scale : 0;
@@ -3320,7 +3696,7 @@ static void status_bar(float y0, float w, float h)
             ImGui::SetTooltip("Run the checks now: the rules, whether the level can be finished, and the recorded clear.");
         ImGui::SameLine(0, 4 * ui_scale);
         ImGui::SetCursorPosY(fy);
-        ImVec4 col = nb ? T.bad : nw ? T.warn : T.good;
+        ImVec4 col = !checks_ever ? T.muted : nb ? T.bad : nw ? T.warn : T.good;
         ImGui::PushStyleColor(ImGuiCol_Text, col);
         ImGui::PushStyleColor(ImGuiCol_Button, drawer_open ? ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered) : ImVec4(0, 0, 0, 0));
         if (ImGui::Button(badge)) { if (drawer_open && drawer_tab == 0) drawer_open = false; else { drawer_open = true; drawer_tab = 0; } }
@@ -3385,6 +3761,49 @@ static void rule(float w)                       /* a divider as wide as the page
     ImGui::Dummy(ImVec2(w, 9));
 }
 
+/* the example level (PaulloDEC's), opened as a new project: saving asks where */
+#include "../resources/example_lev.h"
+static void open_example(void)
+{
+    std::string f = pref_dir() + "example.lev", err;
+    FILE *o = fopen(f.c_str(), "wb");
+    if (!o) { say("Could not write " + f); return; }
+    fwrite(example_lev, 1, sizeof example_lev, o);
+    fclose(o);
+    Project p;
+    if (!project_load_zip(p, f, err)) { say(err); return; }
+    p.fresh = true;                             /* (a copy of its own: Save asks where) */
+    if (use_project(p)) say("The example level: play it (Play here or From start), take it apart, save your own copy.");
+}
+
+/* the logo, drawn at a whole number of screen pixels per game pixel */
+#include "../resources/logo_png.h"
+extern "C" unsigned char *stbi_load_from_memory(const unsigned char *, int, int *, int *, int *, int);
+extern "C" void stbi_image_free(void *);
+static SDL_Texture *logo_tex;
+static int logo_w, logo_h;
+static void draw_logo(float maxw)
+{
+    if (!logo_tex && logo_w >= 0) {
+        int n;
+        unsigned char *px = stbi_load_from_memory(logo_png, (int)sizeof logo_png, &logo_w, &logo_h, &n, 4);
+        if (!px) { logo_w = -1; return; }
+        std::vector<uint32_t> img((size_t)logo_w * logo_h);
+        for (size_t i = 0; i < img.size(); i++)
+            img[i] = (uint32_t)px[i * 4 + 3] << 24 | (uint32_t)px[i * 4] << 16 | (uint32_t)px[i * 4 + 1] << 8 | px[i * 4 + 2];
+        stbi_image_free(px);
+        make_texture(&logo_tex, logo_w, logo_h);
+        SDL_UpdateTexture(logo_tex, NULL, img.data(), logo_w * 4);
+    }
+    if (!logo_tex) return;
+    /* as large as the interface size says, but no wider than the room; a
+       whole number of screen pixels per game pixel when it is 1 or more */
+    /* whole game pixels only, never fewer than one screen pixel each (pixel art
+       shrunk loses pixels); the window clips it when it is narrower than that */
+    float s = std::max(1.0f, std::min(roundf(ui_scale * 0.75f), floorf(maxw / logo_w)));
+    ImGui::Image(tid(logo_tex), ImVec2(floorf(logo_w * s), floorf(logo_h * s)));
+}
+
 static void start_screen(float y0)
 {
     ImGuiIO &io = ImGui::GetIO();
@@ -3396,9 +3815,13 @@ static void start_screen(float y0)
     ImGui::SetCursorPosX((io.DisplaySize.x - W) / 2);
     ImGui::BeginGroup();
     ImGui::Dummy(ImVec2(W, 12 * ui_scale));
-    ImGui::SetWindowFontScale(1.6f);
-    ImGui::Text("Shrapnel");
-    ImGui::SetWindowFontScale(1.0f);
+    draw_logo(W);
+    if (logo_w < 0) {                           /* (no logo: the word) */
+        ImGui::SetWindowFontScale(1.6f);
+        ImGui::Text("Shrapnel");
+        ImGui::SetWindowFontScale(1.0f);
+    }
+    ImGui::Spacing();
     ImGui::TextDisabled("A level editor for Duke Nukem (1991), for Techbot and for the original DOS game.");
     ImGui::Spacing();
 
@@ -3441,6 +3864,9 @@ static void start_screen(float y0)
     if (ImGui::Button("New episode", ImVec2(bw, 0))) open_now = "New episode";
     if (ImGui::Button("Open a level", ImVec2(bw, 0))) open_now = "Open a level";
     if (ImGui::Button("Open an episode", ImVec2(bw, 0))) open_now = "Open an episode";
+    if (ImGui::Button(ICON_PLAY_ARROW " Open the example level", ImVec2(bw, 0))) open_example();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+        ImGui::SetTooltip("A small finished level to play and take apart: keys and locks, items, traps, an exit.");
     ImGui::EndChild();
     ImGui::SameLine(0, 24 * ui_scale);
     ImGui::BeginChild("##dos", ImVec2(col, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
@@ -4003,7 +4429,7 @@ int main(int argc, char **argv)
             if (!checks_stale()) { stale_since = -1; stale_told = false; }
             else if (stale_since < 0) stale_since = now_s;
             else if (!stale_told && (now_s - stale_since > 300 || unchecked >= 40)) {
-                say("The checks haven't run since your last changes: press Check (F7) to see where the level stands.");
+                say("The checks haven't run since your last changes: press Check (" + act_keys(A_CHECK) + ") to see where the level stands.");
                 stale_told = true;
             }
         }
@@ -4038,18 +4464,26 @@ int main(int argc, char **argv)
                 side = std::max(side, lo_s); right = std::max(right, lo_r);
             }
             float tb = TB_BUTTON * ui_scale + 16 * ui_scale, status = ImGui::GetFrameHeight() + 6 * ui_scale;
+            if (panels_hidden) side = right = 0;       /* (Tab: the map alone) */
             if (editing()) {
                 float body = top + tb, body_h = H - body - status;
+                {   /* the brush before this one, for X */
+                    static uint16_t seen = ed.brush;
+                    if (ed.brush != seen) { ed.prev_brush = seen; seen = ed.brush; }
+                }
                 toolbar_window(0, top, W, tb, side, right);
-                sidebar(body, side, body_h);
+                if (!panels_hidden) sidebar(body, side, body_h);
                 canvas(side, body, W - side - right, body_h);
-                right_panel(W - right, body, right, body_h);
+                if (!panels_hidden) right_panel(W - right, body, right, body_h);
                 status_bar(H - status, W, status);
-                splitter("##split_l", side, body, body_h, &side_w, +1, SIDE_W_DEFAULT);
-                splitter("##split_r", W - right, body, body_h, &right_w, -1, RIGHT_W_DEFAULT);
+                if (!panels_hidden) {
+                    splitter("##split_l", side, body, body_h, &side_w, +1, SIDE_W_DEFAULT);
+                    splitter("##split_r", W - right, body, body_h, &right_w, -1, RIGHT_W_DEFAULT);
+                }
                 note_window();
                 import_window();
             } else { start_screen(top); }
+            keys_window(&keys_open, ui_scale, settings_save);
         }
         draw_prompts();
         {
