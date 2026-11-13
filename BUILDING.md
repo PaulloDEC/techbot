@@ -583,12 +583,19 @@ says so (which episodes were found, and the folder's full path), with
 while changing it) it asks for one - type or paste a path, or Browse.  A new
 folder that doesn't do keeps the one that did.
 
-The line under the logo (at the logo's pixel size) and the headings (Game
-folder, the two kinds of project, Recent; at twice that) are written in the
+The logo is as wide as the page's content: it is drawn from a copy enlarged a
+whole number of times with no smoothing to at least that width, then shrunk to
+it smoothly, so it looks sharp at any width and any display scaling - but never
+smaller than one screen pixel a logo pixel (a window narrower than that lets it
+overhang).  The line under it (1x) and the headings (Game folder, the two kinds
+of project, Recent; 2x) are written in the
 game's own font, read from `FONT1.DN1` and `FONT2.DN1` in the game folder
 (nothing of it is shipped), with the game's shadow.  Until a game folder is
-chosen they are in the interface font.  (`pixel_text()` in main.cpp, for any
-other such touches.)  The recent list shows what each project is (a Techbot
+chosen they are in the interface font.  Their 1x is about one interface pixel,
+as a whole number of screen pixels.  (`pixel_text()` in main.cpp, for any
+other such touches.  `SHRAPNEL_TEST_FBS=2.5` with `SHRAPNEL_WINDOW` makes
+the window behave as if the system scaled it, for screenshots of a scaled
+display on one that isn't.)  The recent list shows what each project is (a Techbot
 level or episode, or a DOS episode folder); hover one for its full path.
 
 Behind the start screen, the episode's own tiles move very faintly (View >

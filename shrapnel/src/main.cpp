@@ -4002,26 +4002,52 @@ extern "C" unsigned char *stbi_load_from_memory(const unsigned char *, int, int 
 extern "C" void stbi_image_free(void *);
 static SDL_Texture *logo_tex;
 static int logo_w, logo_h;
-static void draw_logo(float maxw)
+/* the logo as wide as `w` (the page's content): drawn from a copy enlarged
+   a whole number of times with no smoothing (crisp pixels) to at least that
+   width, then shrunk to it smoothly - so any width looks sharp, not just whole
+   multiples.  Never smaller than one screen pixel a logo pixel: if `w` is
+   narrower than that, it is drawn at that and may overhang. */
+static std::vector<uint32_t> logo_px;           /* the logo as it is */
+static SDL_Texture *logo_big;                   /* ... enlarged logo_k times */
+static int logo_k;
+static void draw_logo(float w)
 {
     if (!logo_tex && logo_w >= 0) {
         int n;
         unsigned char *px = stbi_load_from_memory(logo_png, (int)sizeof logo_png, &logo_w, &logo_h, &n, 4);
         if (!px) { logo_w = -1; return; }
-        std::vector<uint32_t> img((size_t)logo_w * logo_h);
-        for (size_t i = 0; i < img.size(); i++)
-            img[i] = (uint32_t)px[i * 4 + 3] << 24 | (uint32_t)px[i * 4] << 16 | (uint32_t)px[i * 4 + 1] << 8 | px[i * 4 + 2];
+        logo_px.resize((size_t)logo_w * logo_h);
+        for (size_t i = 0; i < logo_px.size(); i++)
+            logo_px[i] = (uint32_t)px[i * 4 + 3] << 24 | (uint32_t)px[i * 4] << 16 | (uint32_t)px[i * 4 + 1] << 8 | px[i * 4 + 2];
         stbi_image_free(px);
         make_texture(&logo_tex, logo_w, logo_h);
-        SDL_UpdateTexture(logo_tex, NULL, img.data(), logo_w * 4);
+        SDL_UpdateTexture(logo_tex, NULL, logo_px.data(), logo_w * 4);
     }
     if (!logo_tex) return;
-    /* as large as the interface size says, but no wider than the room; a
-       whole number of screen pixels per game pixel when it is 1 or more */
-    /* whole game pixels only, never fewer than one screen pixel each (pixel art
-       shrunk loses pixels); the window clips it when it is narrower than that */
-    float s = std::max(1.0f, std::min(roundf(ui_scale * 0.75f), floorf(maxw / logo_w)));
-    ImGui::Image(tid(logo_tex), ImVec2(floorf(logo_w * s), floorf(logo_h * s)));
+    float fbs = ImGui::GetIO().DisplayFramebufferScale.x;
+    float wp = floorf(w * fbs);                 /* (screen pixels) */
+    SDL_Texture *t = logo_tex;
+    if (wp <= logo_w) wp = (float)logo_w;       /* (1x: as it is) */
+    else {
+        int k = std::min((int)ceilf(wp / logo_w), 8192 / std::max(logo_w, logo_h));
+        if (k != logo_k || !logo_big) {
+            if (logo_big) SDL_DestroyTexture(logo_big);
+            logo_big = NULL;
+            int bw = logo_w * k, bh = logo_h * k;
+            std::vector<uint32_t> big((size_t)bw * bh);
+            for (int y = 0; y < bh; y++)
+                for (int x = 0; x < bw; x++) big[(size_t)y * bw + x] = logo_px[(size_t)(y / k) * logo_w + x / k];
+            make_texture(&logo_big, bw, bh);
+            SDL_SetTextureScaleMode(logo_big, SDL_ScaleModeLinear);
+            SDL_UpdateTexture(logo_big, NULL, big.data(), bw * 4);
+            logo_k = k;
+        }
+        t = logo_big;
+    }
+    float hp = roundf(wp * logo_h / logo_w);
+    ImVec2 p = ImGui::GetCursorScreenPos();     /* (on a whole screen pixel) */
+    ImGui::SetCursorScreenPos(ImVec2(floorf(p.x * fbs) / fbs, floorf(p.y * fbs) / fbs));
+    ImGui::Image(tid(t), ImVec2(wp / fbs, hp / fbs));
 }
 
 /* ---- the game's own pixel font (FONT1.DN1 + FONT2.DN1, read from the
@@ -4066,8 +4092,14 @@ static bool pixel_font(void)
     pfont_from = dir;
     return true;
 }
-/* the logo's scale: whole screen pixels per game pixel; the pixel font is 1x or 2x that */
-static float logo_scale(void) { return std::max(1.0f, roundf(ui_scale * 0.75f)); }
+/* the pixel font's game pixel at 1x: about one interface pixel, as a whole
+   number of screen pixels (in the interface's units, which may be fractions of
+   a screen pixel on a scaled display) */
+static float logo_scale(void)
+{
+    float fbs = ImGui::GetIO().DisplayFramebufferScale.x;
+    return std::max(1.0f, roundf(ui_scale * fbs)) / fbs;
+}
 static float pixel_width(const char *t, float size) { return 8 * logo_scale() * size * (float)strlen(t); }
 /* `t` in the game's font as an item at the cursor, `size` times the logo's
    pixels (false, drawing nothing, if the game folder has no font: the caller
@@ -4077,9 +4109,9 @@ static float pixel_width(const char *t, float size) { return 8 * logo_scale() * 
 static bool pixel_text(const char *t, float size = 2, const ImVec4 *face = NULL)
 {
     if (!pixel_font()) return false;
-    float s = logo_scale() * size, g = 8 * s;
+    float s = logo_scale() * size, g = 8 * s, fbs = ImGui::GetIO().DisplayFramebufferScale.x;
     ImVec2 p = ImGui::GetCursorScreenPos();
-    p = ImVec2(floorf(p.x), floorf(p.y));
+    p = ImVec2(floorf(p.x * fbs) / fbs, floorf(p.y * fbs) / fbs);     /* (on a whole screen pixel) */
     int n = (int)strlen(t);
     ImGui::Dummy(ImVec2(g * n, g));
     ImDrawList *dl = ImGui::GetWindowDrawList();
@@ -4703,7 +4735,10 @@ static void start_screen(float y0)
     const ImVec2 sp = ImGui::GetStyle().ItemSpacing;
 
     /* the logo, and what Shrapnel is - centred */
-    if (logo_w > 0) ImGui::SetCursorPosX(x0 + std::max(0.0f, floorf((W - logo_w * std::max(1.0f, std::min(logo_scale(), floorf(W / logo_w)))) / 2)));
+    if (logo_w > 0) {                           /* (centred, if 1x is wider than the page: overhanging both sides alike) */
+        float fbs = ImGui::GetIO().DisplayFramebufferScale.x;
+        ImGui::SetCursorPosX(x0 + floorf((W - std::max(W, logo_w / fbs)) / 2));
+    }
     draw_logo(W);
     if (logo_w < 0) {                           /* (no logo: the word) */
         ImGui::SetWindowFontScale(1.6f);
@@ -4738,7 +4773,7 @@ static void start_screen(float y0)
     card_begin("##folder", W, false, bad_folder ? &warn_edge : NULL);
     {
         ImDrawList *dl = ImGui::GetWindowDrawList();
-        float big = font_icons_lg->FontSize, line = ImGui::GetTextLineHeightWithSpacing();
+        float big = font_icons_lg->FontSize * io.FontGlobalScale, line = ImGui::GetTextLineHeightWithSpacing();
         ImVec2 p = ImGui::GetCursorScreenPos();
         float tx = p.x + big + 14 * u;
         const char *icon = asking ? (bad_folder ? ICON_WARNING_FILLED : ICON_FOLDER_OPEN) : ICON_CHECK_CIRCLE;
@@ -4929,11 +4964,12 @@ static void start_screen(float y0)
         float a = there ? 1.0f : 0.5f, ty = p.y + (row_h - ImGui::GetTextLineHeight()) / 2;
         ImVec4 ic = there ? T.accent_text : T.muted;
         if (hov) ic = T.accent_text;
-        dl->AddText(font_icons, font_icons->FontSize, ImVec2(p.x + 12 * u, p.y + (row_h - font_icons->FontSize) / 2),
+        float isz = font_icons->FontSize * io.FontGlobalScale, bsz = font_bold->FontSize * io.FontGlobalScale;   /* (fonts are made at the screen's own pixels) */
+        dl->AddText(font_icons, isz, ImVec2(p.x + 12 * u, p.y + (row_h - isz) / 2),
                     ImGui::GetColorU32(ImVec4(ic.x, ic.y, ic.z, a)), icon);
         std::string name = path_name(r);
         float nx = p.x + 44 * u;
-        dl->AddText(font_bold, font_bold->FontSize, ImVec2(nx, ty), ImGui::GetColorU32(ImVec4(T.text.x, T.text.y, T.text.z, a)), name.c_str());
+        dl->AddText(font_bold, bsz, ImVec2(nx, ty), ImGui::GetColorU32(ImVec4(T.text.x, T.text.y, T.text.z, a)), name.c_str());
         float kx = nx + std::max(ImGui::CalcTextSize(name.c_str()).x + 12 * u, rw * 0.28f);
         dl->AddText(ImVec2(kx, ty), ImGui::GetColorU32(ImVec4(T.muted.x, T.muted.y, T.muted.z, a)), there ? kind : "not found");
         float px = kx + ImGui::CalcTextSize("Techbot episode").x + 24 * u, pr = p.x + rw - 12 * u;
@@ -5410,6 +5446,7 @@ int main(int argc, char **argv)
         SDL_GetWindowSize(win, &ww, &wh);
         SDL_GetRendererOutputSize(ren, &dw, &dh);
         if (ww > 0) fb_scale = (float)dw / ww;
+        if (const char *f = getenv("SHRAPNEL_TEST_FBS")) fb_scale = (float)atof(f);   /* (test aid: a scaled display, on one that isn't; see below) */
         if (fb_scale < 1.01f && SDL_GetDisplayDPI(SDL_GetWindowDisplayIndex(win), &ddpi, NULL, NULL) == 0 && ddpi > 110)
             ui_scale = floorf(ddpi / 96 * 4 + 0.5f) / 4;      /* no OS scaling: scale the interface ourselves */
         if (const char *u = getenv("SHRAPNEL_UI_SCALE")) {     /* (test aid: screenshots at 200%) */
@@ -5488,6 +5525,14 @@ int main(int argc, char **argv)
         }
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
+        if (static const char *tf = getenv("SHRAPNEL_TEST_FBS"); tf) {   /* (the window's pixels as if the OS scaled them) */
+            float f = (float)atof(tf);
+            int dw, dh;
+            SDL_GetRendererOutputSize(ren, &dw, &dh);
+            io.DisplaySize = ImVec2(dw / f, dh / f);
+            io.DisplayFramebufferScale = ImVec2(f, f);
+            io.MousePos = ImVec2(io.MousePos.x / f, io.MousePos.y / f);
+        }
         ImGui::NewFrame();
         for (int k = 0; k < N_SPOTS; k++) spot0[k] = spot1[k] = ImVec2(0, 0);   /* (marked again as drawn) */
         menu_bar();
