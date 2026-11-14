@@ -320,6 +320,58 @@ int ui_pick_pack(int x)
     }
 }
 
+/* ---------------------------------------------------------------- patches
+ * Game setup > Patches: the patches in the game folder's PATCHES folder, each
+ * switched on or off (confirm, left or right).  Every one switched on applies
+ * in Enhanced mode, in this order (a later one wins where two change the same
+ * cell); a change shows the next time a level starts. */
+static void patch_message(int x, const char *a, const char *b, const char *c)
+{
+    frame_at(x, "PATCHES", 6);
+    centre(x, 7, "-------");
+    if (a) centre(x, 10, a);
+    if (b) centre(x, 11, b);
+    if (c) centre(x, 12, c);
+    SPIN_WHILE(any_held());
+    ui_wait_cursor(x + 0x18, 0x12);
+    last_scancode = 0;
+}
+void ui_patches(int x)
+{
+    static PatchInfo list[100];
+    int n = patch_list(list, 100), page = 0, sel = 0, dir, k;
+    if (n == 0) {
+        patch_message(x, "None yet. Put patches", "made in Shrapnel in the", "PATCHES folder.");
+        return;
+    }
+    for (;;) {
+        MenuItem it[9];
+        int first = page * 9, m = n - first < 9 ? n - first : 9, i, pages = (n + 8) / 9;
+        char line[40];
+        frame_at(x, "PATCHES", 6);
+        centre(x, 7, "-------");
+        for (i = 0; i < m; i++) {
+            const PatchInfo *p = &list[first + i];
+            snprintf(line, sizeof line, "%.15s", p->name);
+            row(x, 8 + i, line, patch_enabled(p->file) ? "On" : "Off");
+            it[i].col = (uint8_t)(x + 2); it[i].row = (uint8_t)(8 + i); it[i].key = (uint8_t)(K0 + i);
+        }
+        if (cfg.mode != MODE_ENHANCED) centre(x, 18, "Enhanced mode only");
+        else if (pages > 1) { snprintf(line, sizeof line, "< page %d of %d >", page + 1, pages); centre(x, 18, line); }
+        else centre(x, 18, "Applies at level start");
+        if (sel >= m) sel = m - 1;
+        k = choose(it, m, &sel, &dir);
+        if (k < 0) break;
+        if (dir && pages > 1) { page = (page + dir + pages) % pages; continue; }   /* (more than a page: left / right turn them) */
+        {
+            const PatchInfo *p = &list[first + k];
+            patch_set_enabled(p->file, !patch_enabled(p->file));
+            save_cfg();
+        }
+    }
+    last_scancode = 0;
+}
+
 /* ---------------------------------------------------------------- top level */
 void ui_options(int x)
 {

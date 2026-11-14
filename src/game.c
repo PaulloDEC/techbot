@@ -71,7 +71,7 @@ static uint16_t see_through_backdrop(uint16_t o)
 {
     static const int16_t nb[4] = { -2, 2, -0x100, 0x100 };
     int a = 0, b = 0, k;
-    if (!port_techbot_rules && !pack_map(level_index)) return 0;
+    if (!port_techbot_rules && !pack_map(level_index) && !port_patched) return 0;
     for (k = 0; k < 4; k++) {
         uint16_t v = MAP16((uint16_t)(o + nb[k]));
         if (v == 0) a++; else if (v == 0x20) b++;
@@ -292,7 +292,12 @@ static void read_map(const char *name)
     if (port_map_override) { memcpy(mapbuf, port_map_override, 0x5A00); return; }   /* (port) editor */
     if (pack_map(level_index)) { memcpy(mapbuf, pack_map(level_index), 0x5A00); return; }   /* (port) a pack */
     f = fopen(game_path(name), "rb");
-    if (f) { size_t n = fread(mapbuf, 2, 0x2D00, f); (void)n; fclose(f); }
+    port_patched = 0;
+    if (f) {
+        size_t n = fread(mapbuf, 2, 0x2D00, f);
+        fclose(f);
+        port_patch_map(name, mapbuf, n * 2);   /* (port) patches: Enhanced mode only (port_patch.c) */
+    }
 }
 
 /* 0097:10FB  load a tile file into the VRAM tile cache at A000:4000+vram */
@@ -363,6 +368,7 @@ void load_level(const char *name)
             long n = 0;
             if (port_drop[k].data || port_drop[k].name[0]) { d = port_drop[k].data; n = port_drop[k].len; bn = port_drop[k].name; }
             else if (pack.on) bn = pack_backdrop(level_index, k, &d, &n);
+            else bn = patch_backdrop(k, &d, &n);   /* (port) a patch's */
             if (d) load_tiles_mem(d, n, at, 0x5140);
             else if (!bn || !load_tiles(bn, at, 0x5140))
                 load_tiles(ds_farstr((uint16_t)(0xB47 + (level_index + k) * 4)), at, 0x5140);
@@ -428,6 +434,7 @@ void new_game(void)
     }
     if (demo_record == 2 || demo_play == 2) level_index = 0x14;
     load_level(ds_farstr((uint16_t)(0x3A4 + level_index * 4)));
+    patch_restore_warning();             /* (port) a restored game, its level patched differently since */
     sc = score; score = 0;
     add_score(0);
     score = sc;

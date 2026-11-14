@@ -16,7 +16,7 @@ set(DN1_CORE
     src/port_options.c src/port_qsave.c src/port_labels.c
     src/port_render.c src/port_sound.c
     src/episode_map.c src/port_art.c src/port_log.c src/port_hud.c
-    src/port_state.c src/port_editor.c src/port_reach.c src/port_pack.c src/port_dir.c
+    src/port_state.c src/port_editor.c src/port_reach.c src/port_pack.c src/port_patch.c src/port_dir.c
     shrapnel/third_party/miniz/miniz.c)
 
 # The game itself, built once and shared: Techbot, the headless test build

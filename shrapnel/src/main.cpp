@@ -343,6 +343,7 @@ static void spot_join(TourSpot k, ImVec2 a, ImVec2 b)
 static int tour_step = -1;                  /* -1: no tour */
 static bool tour_seen;                      /* (settings.txt: it starts by itself only once) */
 static bool prompt_about;                   /* Help > About */
+static bool show_changes = true;            /* a patch: mark the cells changed from the game's own (View) */
 enum { BG_BUILD, BG_RAIN, BG_OFF };
 static int start_bg = BG_BUILD;             /* View > Start screen background (settings.txt: start_bg) */
 static bool app_focused = true;
@@ -376,6 +377,60 @@ static int run_states;
 static double reach_wait_until;             /* after an edit: let the map settle first */
 static std::vector<Check> reach_checks;     /* the open level's, from reach */
 static bool show_reach = true;
+
+/* ---- Techbot's views (View > Techbot views): the frame of each at the
+ * mouse, and the cells a wider view can show that the original never does -
+ * from every place the game's camera can be (the reach search's), each
+ * original 208 x 160 view widened as Techbot widens it (port_render.c:
+ * centred, then stopped at the map's edges; a taller one centred too) */
+struct TbView { const char *name; int w, h; };
+static const TbView tb_views[] = {
+    { "Wide (16:9)", 312, 160 }, { "Wide (21:9)", 456, 160 },
+    { "Immersive (16:9)", 424, 200 }, { "Immersive (21:9)", 568, 200 }, { "Widest (640 x 200)", 640, 200 },
+};
+static const int n_tb_views = (int)(sizeof tb_views / sizeof tb_views[0]);
+static int tb_view = 0;                     /* which one */
+static bool show_frames, show_exposed;      /* the frames at the mouse; the cells only wider views show */
+static std::vector<uint8_t> exposed;        /* per cell: 1 seen only in the wider view */
+static uint64_t exposed_key;
+static int exposed_count;
+/* the wider view's top-left (pixels) for the original's at (x, y) */
+static void tb_widen(int x, int y, int vw, int vh, int &wx, int &wy)
+{
+    wx = x - (vw - 208) / 2;
+    wx = std::max(0, std::min(LEVEL_PX_W - vw, wx));
+    wy = y;
+    int extra = vh - 160;
+    if (extra > 0) {
+        wy = y - extra / 2;
+        wy = std::max(0, std::min(LEVEL_PX_H - vh, wy));
+        wy = std::min(wy, y);
+        wy = std::max(wy, y - extra);
+    }
+}
+static void tb_exposed_update(void)
+{
+    uint64_t k = reach_key * 31 + (uint64_t)tb_view + 1;
+    if (k == exposed_key && !exposed.empty()) return;
+    exposed_key = k;
+    exposed.assign(ED_MAP_CELLS, 0);
+    exposed_count = 0;
+    std::vector<uint8_t> orig(ED_MAP_CELLS, 0), wide(ED_MAP_CELLS, 0);
+    const TbView &v = tb_views[tb_view];
+    auto mark = [&](std::vector<uint8_t> &m, int x, int y, int w, int h) {
+        for (int r = y / 16; r <= (y + h - 1) / 16 && r < MAP_H; r++)
+            for (int c = x / 16; c <= (x + w - 1) / 16 && c < MAP_W; c++) m[r * MAP_W + c] = 1;
+    };
+    for (int cy = 0; cy < ED_CAM_H; cy++)
+        for (int cx = 0; cx < ED_CAM_W; cx++) {
+            if (!reach.cam[cy * ED_CAM_W + cx]) continue;
+            int x = cx * 8, y = cy * 16, wx, wy;
+            mark(orig, x, y, 208, 160);
+            tb_widen(x, y, v.w, v.h, wx, wy);
+            mark(wide, wx, wy, v.w, v.h);
+        }
+    for (int i = 0; i < ED_MAP_CELLS; i++) if (wide[i] && !orig[i]) { exposed[i] = 1; exposed_count++; }
+}
 
 static EdReachOpts reach_opts(int i)        /* what Duke brings from the levels before (he keeps them) */
 {
@@ -596,6 +651,7 @@ static void settings_save(void)
     fprintf(f, "ui_size = %d\n", (int)(ui_user * 100 + 0.5f));
     fprintf(f, "high_contrast = %d\ncolour_safe = %d\nanimate = %d\n", theme_hc, theme_cb, view.animate);
     fprintf(f, "tour_seen = %d\n", tour_seen);
+    fprintf(f, "tb_views = %d %d %d\n", tb_view, show_frames, show_exposed);
     fprintf(f, "start_bg = %s\n", start_bg == BG_RAIN ? "rain" : start_bg == BG_OFF ? "off" : "build");
     keys_save(f);
     fclose(f);
@@ -618,6 +674,11 @@ static void settings_load(void)
         else if (!strncmp(b, "animate", 7) && strchr(b, '=')) view.animate = atoi(strchr(b, '=') + 1) != 0;
         else if (!strncmp(b, "start_bg", 8)) start_bg = strstr(b, "rain") ? BG_RAIN : strstr(b, "off") ? BG_OFF : BG_BUILD;
         else if (!strncmp(b, "tour_seen", 9) && strchr(b, '=')) tour_seen = atoi(strchr(b, '=') + 1) != 0;
+        else if (!strncmp(b, "tb_views", 8) && strchr(b, '=')) {
+            int v = 0, f2 = 0, x = 0;
+            sscanf(strchr(b, '=') + 1, "%d %d %d", &v, &f2, &x);
+            tb_view = std::max(0, std::min(n_tb_views - 1, v)); show_frames = f2 != 0; show_exposed = x != 0;
+        }
         else keys_load(b);                          /* key.<action> = ... */
     fclose(f);
 }
@@ -691,7 +752,8 @@ static bool save_project_to(const std::string &where)
     dos_save_forced = false;
     sync_current();
     std::string err, old_as = autosave_path();
-    bool ok = proj.dos ? project_save_dos(proj, ep, where, err) : project_save_zip(proj, where, err);
+    bool ok = proj.patch ? project_save_patch(proj, where, err)
+            : proj.dos ? project_save_dos(proj, ep, where, err) : project_save_zip(proj, where, err);
     if (!ok) { say(err); return false; }
     path_remove(old_as);
     proj.path = where;
@@ -699,6 +761,13 @@ static bool save_project_to(const std::string &where)
     path_remove(autosave_path());
     mark_saved();
     recent_add(where);
+    if (proj.patch) {
+        int maps = 0, cells = 0;
+        for (const ProjEntry &e : proj.entries) { int n = patch_changes(e); maps += n > 0; cells += n; }
+        say("Saved " + path_name(where) + ": " + std::to_string(cells) + " changed cells in " + std::to_string(maps) +
+            (maps == 1 ? " map" : " maps") + ". For Techbot, copy it into the game folder's PATCHES folder.");
+        return true;
+    }
     say(proj.dos ? "Saved the episode's 11 map files in " + where : "Saved " + path_name(where) +
                    (path_exists(where + ".bak") ? " (the previous version is " + path_name(where) + ".bak)" : ""));
     return true;
@@ -707,7 +776,8 @@ static bool save_project_to(const std::string &where)
 static bool save_project_as(void)
 {
     std::string start = proj.path.empty() ? last_dir : path_dir(proj.path);
-    std::string p = proj.dos ? dialog_folder(start, "Choose a folder for the DOS episode's map files")
+    std::string p = proj.patch ? dialog_save_patch(start, file_safe(proj.name) + ".pat")
+                  : proj.dos ? dialog_folder(start, "Choose a folder for the DOS episode's map files")
                              : dialog_save_project(start, file_safe(proj.name) + (proj.episode ? ".epi" : ".lev"), proj.episode);
     if (p.empty()) { say("Save as: nothing chosen (on Linux this needs zenity)"); return false; }
     return save_project_to(p);
@@ -723,7 +793,8 @@ static void autosave_tick(void)
     last_autosave = now_s;
     sync_current();
     std::string err;
-    if (project_save_zip(proj, autosave_path(), err, "saved_from = " + proj.path + "\n", false)) edits = 0;
+    if (proj.patch) { if (project_save_patch(proj, autosave_path(), err, false)) edits = 0; }
+    else if (project_save_zip(proj, autosave_path(), err, "saved_from = " + proj.path + "\n", false)) edits = 0;
 }
 
 /* ================================================================ prompts */
@@ -786,6 +857,10 @@ static void open_entry(int i)
     if (cur >= 0 && cur < (int)proj.entries.size()) { sync_current(); std::swap(proj.entries[cur].hist, hist); }
     cur = i;
     ProjEntry &e = proj.entries[i];
+    if (proj.patch && e.pep != ep.number && ep.available[e.pep]) {   /* (a patch: each episode's levels with that episode's art) */
+        if (ep.load(e.pep)) build_episode_textures();
+        proj.ep = ep.number;
+    }
     apply_drops(i);
     lv->load_map(ep, proj.slot_of(i), e.map.data(), proj.label(i));
     hist = History();
@@ -842,6 +917,40 @@ static void new_project(int e, bool dos, bool episode, int levels)
                             "A new level: a small room with the player start and the exit door, in the middle of the map.");
 }
 
+static void new_patch(void)
+{
+    std::string err;
+    Project p;
+    if (!project_new_patch(p, ep, err)) { say(err); return; }
+    int n = 0;
+    for (int e = 1; e <= 3; e++) n += ep.available[e];
+    if (use_project(p)) say("A new patch: the stock levels of " + std::string(n == 1 ? "the episode" : "every episode") +
+                            " in the game folder. Saving keeps only what you change.");
+}
+
+/* a stock copy, edited, as a patch (its changes kept, its history not) */
+static bool can_patch(void)
+{
+    if (!editing() || proj.patch) return false;
+    for (const ProjEntry &e : proj.entries) if (e.pep < 1 || e.pslot < 0) return false;
+    return true;
+}
+static void save_as_patch(void)
+{
+    sync_current();
+    Project p;
+    std::string err;
+    if (!project_to_patch(proj, ep, p, err)) { say(err); return; }
+    int first = 0;
+    for (int i = 0; i < (int)p.entries.size(); i++)
+        if (p.entries[i].pep == proj.entries[cur].pep && p.entries[i].pslot == proj.entries[cur].pslot) { first = i; break; }
+    std::string was = proj.name;
+    if (!use_project(p, first)) return;
+    proj.meta_dirty = true;
+    say("Now a patch, with your changes to " + was + ": saving asks where, as a .PAT.");
+    save_project_as();
+}
+
 static void open_stock(int e, bool dos, int slot, int first = 0)
 {
     std::string err;
@@ -864,6 +973,15 @@ static void open_path(const std::string &path)
         return;
     }
     std::string x = path_ext(path);
+    if (x == ".pat" || (x == ".autosave" && is_patch_file(path))) {
+        std::string notes;
+        if (!project_load_patch(p, ep, path, err, &notes)) { say(err); return; }
+        if (x == ".autosave") { p.fresh = true; p.path.clear(); }
+        int first = 0;                          /* (the first level it changes) */
+        for (int i = 0; i < (int)p.entries.size(); i++) if (patch_changes(p.entries[i])) { first = i; break; }
+        if (use_project(p, first)) say("Opened the patch " + path_name(path) + (notes.empty() ? "" : ". " + notes));
+        return;
+    }
     if (x == ".lev" || x == ".epi" || x == ".zip" || x == ".autosave") {
         if (!project_load_zip(p, path, err)) { say(err); return; }
         if (use_project(p)) say("Opened " + path_name(path));
@@ -929,7 +1047,10 @@ static void restore_autosave(void)
     std::string err;
     std::map<std::string, std::string> top;
     std::string as = autosave_path();
-    if (!project_load_zip(p, as, err, &top)) { say("Could not read the autosave: " + err); return; }
+    if (is_patch_file(as)) {                    /* (a patch's: the stock maps here, with its changes) */
+        if (!project_load_patch(p, ep, as, err)) { say("Could not read the autosave: " + err); return; }
+        top["saved_from"] = proj.path;
+    } else if (!project_load_zip(p, as, err, &top)) { say("Could not read the autosave: " + err); return; }
     p.path = proj.untitled() ? top["saved_from"] : proj.path;
     p.from_stock = proj.from_stock;
     p.fresh = proj.fresh || p.path.empty();
@@ -960,6 +1081,28 @@ static void do_delete(const char *what)
 }
 
 static void do_cut(void) { do_copy(); do_delete("Cut"); }
+
+/* a patch: the selection's cells (or, with none, the whole level's) back as
+ * the game's own file has them (undoable; the locks don't apply) */
+static void revert_to_stock(void)
+{
+    if (!proj.patch || cur < 0) return;
+    const ProjEntry &en = proj.entries[cur];
+    if (en.orig.size() != (size_t)ED_MAP_CELLS) return;
+    Edit e(lv->map, 0);
+    for (int i = 0; i < ED_MAP_CELLS; i++)
+        if ((!sel.any || sel.on[i]) && lv->map[i] != en.orig[i]) e.set(i % MAP_W, i / MAP_W, en.orig[i]);
+    if (!e.changed) { say(sel.any ? "Those cells are as the game has them already" : "This level is as the game has it already"); return; }
+    map_changed(e.c0, e.r0, e.c1, e.r1);
+    commit("Back to the original (" + std::to_string(e.changed) + " cells)");
+}
+static int changes_here(void)                   /* a patch: the open level's changed cells */
+{
+    if (!proj.patch || cur < 0 || proj.entries[cur].orig.size() != (size_t)ED_MAP_CELLS) return 0;
+    int n = 0;
+    for (int i = 0; i < ED_MAP_CELLS; i++) n += lv->map[i] != proj.entries[cur].orig[i];
+    return n;
+}
 
 static void do_paste(void)
 {
@@ -1254,13 +1397,16 @@ static void menu_bar(void)
     spot(TS_FILE, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     if (file_open) {
         if (ImGui::MenuItem("Start screen...", NULL, false, editing())) guard_changes([] { close_project(); });
-        if (ImGui::MenuItem("Open project (.LEV, .EPI)...", act_keys(A_OPEN).c_str(), false, ep.number != 0)) guard_changes([] { open_project_dialog(); });
+        if (ImGui::MenuItem("Open project (.LEV, .EPI, .PAT)...", act_keys(A_OPEN).c_str(), false, ep.number != 0)) guard_changes([] { open_project_dialog(); });
         if (ImGui::MenuItem("Open DOS episode folder...", NULL, false, ep.number != 0))
             guard_changes([] { std::string d = dialog_folder(last_dir, "Open a DOS episode folder"); if (!d.empty()) open_path(d); else say("Open: nothing chosen (on Linux this needs zenity)"); });
         ImGui::Separator();
         if (ImGui::MenuItem("Save", act_keys(A_SAVE).c_str(), false, editing())) save_project();
         if (ImGui::MenuItem(proj.dos ? "Save in another folder..." : "Save as...", act_keys(A_SAVE_AS).c_str(), false, editing())) save_project_as();
         if (ImGui::MenuItem("Convert to Techbot episode", NULL, false, editing() && proj.dos)) convert_to_techbot();
+        if (ImGui::MenuItem("Save as a patch...", NULL, false, can_patch())) save_as_patch();
+        if (!can_patch() && editing() && !proj.patch && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("For a stock level or episode opened from the game folder (and not saved since)");
         if (ImGui::MenuItem("Play in Techbot", act_keys(A_PLAY_TECHBOT).c_str(), false, editing())) play_in_techbot();
         if (ImGui::MenuItem("Revert to saved", NULL, false, editing() && !proj.untitled() && proj_modified()))
             guard_changes([] { std::string p = proj.path; open_path(p); });
@@ -1280,6 +1426,8 @@ static void menu_bar(void)
         if (ImGui::MenuItem("Paste", act_keys(A_PASTE).c_str(), false, ok && !clip.empty())) do_paste();
         if (ImGui::MenuItem("Duplicate", act_keys(A_DUPLICATE).c_str(), false, ok && sel.any)) do_duplicate();
         if (ImGui::MenuItem("Delete", act_keys(A_DELETE).c_str(), false, ok && sel.any)) do_delete("Delete");
+        if (proj.patch && ImGui::MenuItem(sel.any ? "Back to the original (selection)" : "Back to the original (whole level)", NULL, false, ok && changes_here()))
+            revert_to_stock();
         ImGui::Separator();
         if (ImGui::MenuItem("Flip horizontal", act_keys(A_FLIP_H).c_str(), false, ok && sel.any)) do_flip(true);
         if (ImGui::MenuItem("Flip vertical", act_keys(A_FLIP_V).c_str(), false, ok && sel.any)) do_flip(false);
@@ -1310,6 +1458,18 @@ static void menu_bar(void)
         if (ImGui::MenuItem("Check as you edit", NULL, &live)) set_checks_manual(!live);
         if (ImGui::MenuItem("Animate", NULL, &view.animate)) settings_save();
         ImGui::MenuItem("Play-test path", NULL, &view.trail, !trail.empty());
+        if (proj.patch) ImGui::MenuItem("Changed cells", NULL, &show_changes);
+        if (ImGui::BeginMenu("Techbot views")) {
+            if (ImGui::MenuItem("Frames at the mouse", NULL, &show_frames)) settings_save();
+            if (ImGui::MenuItem("Cells only wider views show", NULL, &show_exposed)) settings_save();
+            ImGui::SeparatorText("Wider view");
+            for (int k = 0; k < n_tb_views; k++) {
+                char b[64];
+                snprintf(b, sizeof b, "%s  %d x %d", tb_views[k].name, tb_views[k].w, tb_views[k].h);
+                if (ImGui::MenuItem(b, NULL, tb_view == k)) { tb_view = k; settings_save(); }
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::MenuItem("Side panels", act_keys(A_PANELS).c_str(), !panels_hidden)) panels_hidden = !panels_hidden;
         bool dr = drawer_open && drawer_tab == 0, hi = drawer_open && drawer_tab == 1;
         if (ImGui::MenuItem("Checks panel", NULL, dr, editing())) { drawer_open = !dr; drawer_tab = 0; }
@@ -1586,12 +1746,13 @@ static void sidebar(float y0, float w, float h)
     ImGui::Begin("##sidebar", NULL, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar);
     if (editing()) {
-        bool can_add = !proj.dos && proj.episode;
+        bool can_add = !proj.dos && proj.episode && !proj.patch;
         ImGui::PushFont(font_bold);
         ImGui::TextUnformatted(proj.name.c_str());
         ImGui::PopFont();
         ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
-        ImGui::Text("%s, episode %d", proj.dos ? "DOS episode" : proj.episode ? "Techbot episode" : "Techbot level", proj.ep);
+        if (proj.patch) ImGui::TextUnformatted("Patch: changes to the stock levels");
+        else ImGui::Text("%s, episode %d", proj.dos ? "DOS episode" : proj.episode ? "Techbot episode" : "Techbot level", proj.ep);
         ImGui::PopStyleColor();
         ImGui::Spacing();
         {   /* LEVELS, with add and remove at the right */
@@ -1620,19 +1781,29 @@ static void sidebar(float y0, float w, float h)
         }
         float mini_w = std::min(w - ImGui::GetStyle().WindowPadding.x * 2, h * 0.22f * MAP_W / MAP_H);   /* (not too tall) */
         float mini_h = mini_w * MAP_H / MAP_W;
-        float list_h = std::max(ImGui::GetFrameHeight() * 4, std::min((float)proj.entries.size() * ImGui::GetTextLineHeightWithSpacing() + 10 * ui_scale,
+        int rows = (int)proj.entries.size();
+        if (proj.patch) for (int i = 0; i < (int)proj.entries.size(); i++) rows += !i || proj.entries[i].pep != proj.entries[i - 1].pep;
+        float list_h = std::max(ImGui::GetFrameHeight() * 4, std::min((float)rows * ImGui::GetTextLineHeightWithSpacing() + 10 * ui_scale,
                                                                       (h - mini_h) * 0.42f));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, T.panel2);
         ImVec2 levels_top = ImGui::GetCursorScreenPos();
         ImGui::BeginChild("##levels", ImVec2(0, list_h), ImGuiChildFlags_Borders);
         ImGui::PopStyleColor();
         for (int i = 0; i < (int)proj.entries.size(); i++) {
+            if (proj.patch && (!i || proj.entries[i].pep != proj.entries[i - 1].pep)) {   /* (a patch: by episode) */
+                if (i) ImGui::Spacing();
+                ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+                ImGui::Text("  EPISODE %d", proj.entries[i].pep);
+                ImGui::PopStyleColor();
+            }
             ImGui::PushID(i);
             bool mod = i == cur ? hist.modified() : proj.entries[i].hist.modified();
             bool hall = proj.entries[i].hallway;
             bool drag = can_add && !hall;
             float x0 = ImGui::GetCursorPosX();
-            std::string label = std::string(hall ? "      " : "      ") + proj.label(i) + (mod ? "  \xE2\x80\xA2" : "");
+            std::string name = proj.label(i);
+            if (proj.patch) name = hall ? "Hallway" : "Level " + std::to_string(proj.entries[i].pslot / 2 + 1);
+            std::string label = std::string(hall ? "      " : "      ") + name + (mod ? "  \xE2\x80\xA2" : "");
             if (hall) ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
             if (ImGui::Selectable(label.c_str(), i == cur) && i != cur) open_entry(i);
             if (hall) ImGui::PopStyleColor();
@@ -1663,6 +1834,25 @@ static void sidebar(float y0, float w, float h)
                     ImGui::SetItemTooltip("Drag onto another level to change the order");
             }
             (void)x0;
+            if (proj.patch) {                   /* a patch: how many cells it changes, at the right */
+                int n = i == cur ? changes_here() : patch_changes(proj.entries[i]);
+                bool own = patch_settings(proj.entries[i]);
+                if (n || own) {
+                    char b[24];
+                    if (n && own) snprintf(b, sizeof b, "%d +", n);
+                    else if (n) snprintf(b, sizeof b, "%d", n);
+                    else snprintf(b, sizeof b, "+");
+                    ImVec2 ts = ImGui::CalcTextSize(b);
+                    float right = r1.x - 2 * ui_scale - (i < (int)checks.size() && (check_count(checks[i], CS_BROKEN) || check_count(checks[i], CS_WARNING))
+                                                         ? ImGui::CalcTextSize(ICON_WARNING_FILLED).x + 6 * ui_scale : 0);
+                    float px = 5 * ui_scale, h = ImGui::GetTextLineHeight();
+                    ImVec2 a(right - ts.x - 2 * px, (r0.y + r1.y - h) / 2), b2(right, a.y + h);
+                    dl->AddRectFilled(a, b2, ImGui::GetColorU32(ImVec4(T.accent.x, T.accent.y, T.accent.z, theme_dark ? 0.25f : 0.15f)), h / 2);
+                    dl->AddText(ImVec2(a.x + px, a.y), ImGui::GetColorU32(T.accent_text), b);
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("%d cell%s changed from the game's own%s", n, n == 1 ? "" : "s", own ? "; backdrops or words of its own (+)" : "");
+                }
+            }
             if (i < (int)checks.size()) {           /* a dot for its worst check result, at the right */
                 int nb = check_count(checks[i], CS_BROKEN), nw = check_count(checks[i], CS_WARNING);
                 if (nb || nw) {                 /* (an icon as well as a colour: broken, or a warning) */
@@ -1953,8 +2143,52 @@ static int note_char(ImGuiInputTextCallbackData *d)   /* what the game's font ha
 static void note_section(void)
 {
     ProjEntry &e = proj.entries[cur];
+    if (proj.patch && e.hallway) {              /* a patch's hallway: one map, but each hallway its own words */
+        static int h = 0;
+        char lab[40];
+        snprintf(lab, sizeof lab, "Hallway after level %d", h + 1);
+        ImGui::SetNextItemWidth(-1);
+        if (ImGui::BeginCombo("##whichhall", lab)) {
+            for (int k = 0; k < 9; k++) {
+                char b[48];
+                snprintf(b, sizeof b, "Hallway after level %d%s", k + 1, e.hnote_own[k] ? "  (own words)" : "");
+                if (ImGui::Selectable(b, k == h)) h = k;
+            }
+            ImGui::EndCombo();
+        }
+        std::string stock[4];
+        for (int k = 0; k < 4; k++) { const char *t = ed_stock_note(h * 2 + 1, k); stock[k] = t ? t : ""; }
+        bool own = e.hnote_own[h];
+        if (ImGui::Checkbox("Customize", &own)) {
+            if (own && !e.hnote_own[h]) for (int k = 0; k < 4; k++) e.hnote[h][k] = stock[k];
+            e.hnote_own[h] = own;
+            proj.meta_dirty = true;
+            edits++;
+        }
+        if (e.hnote_own[h]) {
+            for (int k = 0; k < 4; k++) {
+                char b[ED_NOTE_CHARS + 1];
+                snprintf(b, sizeof b, "%s", e.hnote[h][k].c_str());
+                ImGui::PushID(k);
+                ImGui::SetNextItemWidth(-1);
+                if (ImGui::InputText("##l", b, sizeof b, ImGuiInputTextFlags_CallbackCharFilter, note_char)) {
+                    e.hnote[h][k] = b;
+                    proj.meta_dirty = true;
+                    edits++;
+                }
+                ImGui::PopID();
+            }
+            note_preview(e.hnote[h]);
+            hint("Four lines of up to 23 characters.");
+        } else {
+            note_preview(stock);
+            hint("The game's own words for this hallway. Every hallway shares this map, but each has its own words: "
+                 "choose one above and tick the box to write them.");
+        }
+        return;
+    }
     std::string stock[4];
-    int slot = proj.dos ? proj.slot_of(cur) : cur;      /* (a Techbot episode plays its entries in order) */
+    int slot = proj.dos || proj.patch ? proj.slot_of(cur) : cur;   /* (a Techbot episode plays its entries in order) */
     for (int k = 0; k < 4; k++) { const char *t = ed_stock_note(slot, k); stock[k] = t ? t : ""; }
     if (proj.dos) {
         if (e.hallway) { hint("The game's own notes: a different one in each hallway, fixed by the original EXE."); return; }
@@ -2518,8 +2752,30 @@ static void project_details(void)
 static void level_props(void)
 {
     ImGui::SeparatorText(proj.label(cur).c_str());
+    if (proj.patch) {
+        int n = changes_here();
+        ImGui::TextWrapped("%s", n ? (std::to_string(n) + (n == 1 ? " cell" : " cells") + " changed from " + proj.entries[cur].pfile + ".").c_str()
+                                   : ("As the game has it (" + proj.entries[cur].pfile + ").").c_str());
+        if (n) {
+            if (ImGui::SmallButton(sel.any ? "Selection back to the original" : "Whole level back to the original")) revert_to_stock();
+        }
+        hint("Changed cells are marked on the map (View > Changed cells).");
+        if (proj.entries[cur].hallway) {
+            hint("Every hallway of the episode shares this map, so a patch changes them all alike; they keep "
+                 "the backdrops of the level before them. Each keeps its own words, which can be changed one by one.");
+            if (level_has(0x3040) || level_has(0x3041)) {
+                ImGui::Spacing();
+                ImGui::TextUnformatted("Note monitor");
+                ImGui::SameLine();
+                if (ImGui::SmallButton(ICON_EDIT " Messages...")) note_win = true;
+            }
+            return;
+        }
+        ImGui::Spacing();
+        /* then a level's backdrops and words, as in a Techbot project (below) */
+    }
     if (!proj.dos && !proj.entries[cur].hallway) backdrops_section();
-    else if (!proj.dos) {
+    else if (!proj.dos && !proj.patch) {
         int l = cur;
         while (l > 0 && proj.entries[l].hallway) l--;
         hint(("Shows the backdrops of " + proj.label(l) + ", as the game keeps a level's for the hallway after it.").c_str());
@@ -2544,7 +2800,8 @@ static void note_window(void)
     std::string title = proj.label(cur) + ": message###levelmsg";
     if (ImGui::Begin(title.c_str(), &note_win, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
         bool here = level_has(0x3040) || level_has(0x3041);
-        hint(here ? "Shown when Duke reads the level's note monitor or meets its Dr. Proton screen. A level has one message, "
+        hint(proj.patch && proj.entries[cur].hallway ? "Shown when Duke reads the hallway's note monitor - a different message in each hallway."
+             : here ? "Shown when Duke reads the level's note monitor or meets its Dr. Proton screen. A level has one message, "
                     "whichever of them shows it."
                   : "Nothing in this level shows it yet: place a Note monitor or a Dr. Proton screen (Actors).");
         note_section();
@@ -3416,6 +3673,24 @@ static void canvas(float x0, float y0, float w, float h)
             for (int c = c0; c <= c1; c++) dl->AddLine(cell_pos(c, r0), cell_pos(c, r1), IM_COL32(255, 255, 255, 40));
             for (int r = r0; r <= r1; r++) dl->AddLine(cell_pos(c0, r), cell_pos(c1, r), IM_COL32(255, 255, 255, 40));
         }
+        if (proj.patch && show_changes && cur >= 0 && proj.entries[cur].orig.size() == (size_t)ED_MAP_CELLS) {
+            /* a patch: the cells changed from the game's own - a light wash, and an
+               outline round each patch of them */
+            const std::vector<uint16_t> &o = proj.entries[cur].orig;
+            auto changed = [&](int c, int r) { return c >= 0 && r >= 0 && c < MAP_W && r < MAP_H && lv->map[r * MAP_W + c] != o[r * MAP_W + c]; };
+            ImU32 wash = ImGui::GetColorU32(ImVec4(T.accent.x, T.accent.y, T.accent.z, 0.22f)), edge = ImGui::GetColorU32(T.accent);
+            float lw = std::max(1.5f, cell * 0.08f);
+            for (int r = r0; r < r1; r++)
+                for (int c = c0; c < c1; c++) {
+                    if (!changed(c, r)) continue;
+                    ImVec2 q = cell_pos(c, r), e(q.x + cell, q.y + cell);
+                    dl->AddRectFilled(q, e, wash);
+                    if (!changed(c - 1, r)) dl->AddLine(q, ImVec2(q.x, e.y), edge, lw);
+                    if (!changed(c + 1, r)) dl->AddLine(ImVec2(e.x, q.y), e, edge, lw);
+                    if (!changed(c, r - 1)) dl->AddLine(q, ImVec2(e.x, q.y), edge, lw);
+                    if (!changed(c, r + 1)) dl->AddLine(ImVec2(q.x, e.y), e, edge, lw);
+                }
+        }
         if (view.actors && view.labels && cell >= 16)            /* the walkway: where it will extend, once a hand reader runs it */
             for (int r = r0; r < r1; r++)
                 for (int c = 0; c < c1; c++) {                 /* (from the row's start: its origin may be off to the left) */
@@ -3458,6 +3733,22 @@ static void canvas(float x0, float y0, float w, float h)
                     if (r == MAP_H - 1 || !sel.on[(r + 1) * MAP_W + c]) dl->AddLine(ImVec2(q.x, e.y), e, col, 1.5f);
                 }
 
+        if (show_exposed && reach_current()) {  /* what only the wider view shows: the warning colour, hatched the other way */
+            tb_exposed_update();
+            ImU32 fill = ImGui::GetColorU32(ImVec4(T.warn.x, T.warn.y, T.warn.z, 0.30f));
+            ImU32 hc = ImGui::GetColorU32(ImVec4(T.warn.x, T.warn.y, T.warn.z, 0.85f));
+            for (int r = r0; r < r1; r++)
+                for (int c = c0; c < c1; c++) {
+                    if (!exposed[r * MAP_W + c]) continue;
+                    ImVec2 q = cell_pos(c, r), e(q.x + cell, q.y + cell);
+                    dl->AddRectFilled(q, e, fill);
+                    if (cell >= 10) {
+                        dl->AddLine(q, e, hc, 1.0f);
+                        dl->AddLine(ImVec2((q.x + e.x) / 2, q.y), ImVec2(e.x, (q.y + e.y) / 2), hc, 1.0f);
+                        dl->AddLine(ImVec2(q.x, (q.y + e.y) / 2), ImVec2((q.x + e.x) / 2, e.y), hc, 1.0f);
+                    }
+                }
+        }
         if (show_reach && reach_current()) {    /* where Duke can get to; where he gets stuck; a way to the end */
             for (int r = r0; r < r1; r++)
                 for (int c = c0; c < c1; c++) {
@@ -3588,7 +3879,29 @@ static void canvas(float x0, float y0, float w, float h)
                 bool locked = cell_locked(lv->at(mc, mr), ed.locks);
                 dl->AddRect(q, ImVec2(q.x + cell, q.y + cell), locked ? IM_COL32(255, 80, 60, 230) : IM_COL32(255, 255, 0, 220), 0, 0, 1.5f);
             }
+            if (show_frames) {                  /* Techbot's views around the cell: the original's, centred on it, and the wider one */
+                int x = std::max(0, std::min(LEVEL_PX_W - 208, (mc * 16 + 8 - 104) & ~7));
+                int y = std::max(0, std::min(LEVEL_PX_H - 160, (mr - 5) * 16));
+                const TbView &v = tb_views[tb_view];
+                int wx, wy;
+                tb_widen(x, y, v.w, v.h, wx, wy);
+                auto frame = [&](int fx, int fy, int fw, int fh, ImU32 col, const char *label) {
+                    ImVec2 q(a.x + fx * (float)view.zoom, a.y + fy * (float)view.zoom);
+                    ImVec2 e(q.x + fw * (float)view.zoom, q.y + fh * (float)view.zoom);
+                    dl->AddRect(ImVec2(q.x - 1, q.y - 1), ImVec2(e.x + 1, e.y + 1), IM_COL32(0, 0, 0, 160), 0, 0, 4.0f);
+                    dl->AddRect(q, e, col, 0, 0, 2.0f);
+                    ImVec2 ts = ImGui::CalcTextSize(label);
+                    dl->AddRectFilled(ImVec2(q.x, q.y), ImVec2(q.x + ts.x + 8, q.y + ts.y + 4), IM_COL32(0, 0, 0, 170));
+                    dl->AddText(ImVec2(q.x + 4, q.y + 2), col, label);
+                };
+                char wl[64];
+                snprintf(wl, sizeof wl, "%s", v.name);
+                frame(wx, wy, v.w, v.h, ImGui::GetColorU32(T.accent), wl);
+                frame(x, y, 208, 160, IM_COL32(255, 255, 255, 235), "Original");
+            }
             info = describe(mc, mr);
+            if (show_exposed && reach_current()) info += "    " + std::to_string(exposed_count) + " cells only the wider view shows";
+            else if (show_exposed) info += "    (the wider view's cells: once Reach has searched the level)";
             if (cell_locked(lv->at(mc, mr), ed.locks)) info += "    (protected)";
             if (view.actors && on_message_actor(fx, fy)) info += "    Double-click: the level's message";
         }
@@ -4182,14 +4495,14 @@ static bool start_button(const char *label, ImVec2 size, bool primary)
     return r;
 }
 /* a card on the start screen; card_end() evens up the heights of side-by-side ones */
-static void card_begin(const char *id, float w, bool accent_top = false, const ImVec4 *edge = NULL)
+static void card_begin(const char *id, float w, bool accent_top = false, const ImVec4 *edge = NULL, bool tight = false, float h = 0)
 {
     ImGui::PushStyleColor(ImGuiCol_ChildBg, T.panel);
     ImGui::PushStyleColor(ImGuiCol_Border, edge ? *edge : T.border);
     ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, 8 * ui_scale);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20 * ui_scale, 18 * ui_scale));
-    ImGui::BeginChild(id, ImVec2(w, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_AlwaysUseWindowPadding,
-                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, tight ? ImVec2(20 * ui_scale, 12 * ui_scale) : ImVec2(20 * ui_scale, 18 * ui_scale));
+    ImGui::BeginChild(id, ImVec2(w, h), ImGuiChildFlags_Borders | (h > 0 ? 0 : ImGuiChildFlags_AutoResizeY) | ImGuiChildFlags_AlwaysUseWindowPadding,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     ImGui::PushStyleColor(ImGuiCol_Border, T.border);   /* (the edge is the card's; what's in it, as usual) */
     if (accent_top) {
         ImVec2 p = ImGui::GetWindowPos();
@@ -4197,6 +4510,15 @@ static void card_begin(const char *id, float w, bool accent_top = false, const I
         ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + ImGui::GetWindowWidth(), p.y + 3 * ui_scale),
                                                   ImGui::GetColorU32(T.accent), r, ImDrawFlags_RoundCornersTop);
     }
+}
+/* ... with `natural` set to the height it needs (outside), for sizing it next frame */
+static void card_end_fit(float *natural)
+{
+    *natural = ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + ImGui::GetStyle().WindowPadding.y;
+    ImGui::PopStyleColor();
+    ImGui::EndChild();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(2);
 }
 static void card_end(float *need = NULL, float tallest = 0)
 {
@@ -4209,6 +4531,24 @@ static void card_end(float *need = NULL, float tallest = 0)
     ImGui::PopStyleVar(2);
     ImGui::PopStyleColor(2);
 }
+/* a card's fuller description, shown after the mouse rests on the card a
+   moment (not on its buttons, which say what they do) */
+static void card_tip(int k, const char *text)
+{
+    static double since[4] = { -1, -1, -1, -1 };
+    bool over = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) && !ImGui::IsAnyItemHovered();
+    if (!over) { since[k] = -1; return; }
+    if (since[k] < 0) since[k] = ImGui::GetTime();
+    if (ImGui::GetTime() - since[k] < 0.45) return;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10 * ui_scale, 8 * ui_scale));
+    ImGui::BeginTooltip();
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+    ImGui::PopStyleVar();
+}
+
 /* a path, cut from the left with "..." to fit `w` */
 static std::string fit_path(const std::string &t, float w)
 {
@@ -4878,16 +5218,20 @@ static void start_screen(float y0)
     card_end();
     ImGui::Dummy(ImVec2(1, 18 * u));
 
-    /* the two kinds of project */
+    /* the three kinds of project: Techbot levels and episodes, the main one,
+       on the left; DOS episodes and patches, two shorter cards, on the right -
+       the two sides as tall as each other (by what each needed last frame) */
     static int new_ep = 1, new_levels = 10, dos_ep = 1;
-    static float need[2];
+    static float need[3];
     const char *open_now = NULL;
     bool ok = !bad_folder;
-    float gap = 20 * u, col = floorf((W - gap) / 2), tallest = std::max(need[0], need[1]);
+    float gap = 20 * u, col = floorf((W - gap) / 2), vgap = 16 * u;
+    float total = std::max(need[0], need[1] + vgap + need[2]), spare = total - (need[1] + vgap + need[2]);
     ImGui::BeginDisabled(!ok);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10 * u, 8 * u));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10 * u, 10 * u));
-    card_begin("##techbot", col, true);
+    bool sized = need[0] > 0;                   /* (the first frame: each as it needs, to measure) */
+    card_begin("##techbot", col, true, NULL, false, sized ? total : 0);
     {
         float half = floorf((ImGui::GetContentRegionAvail().x - 10 * u) / 2), full = ImGui::GetContentRegionAvail().x;
         ImGui::Dummy(ImVec2(1, 2 * u));
@@ -4907,23 +5251,46 @@ static void start_screen(float y0)
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
             ImGui::SetTooltip("A small finished level to play and take apart: keys and locks, items, traps, an exit.");
     }
-    card_end(&need[0], tallest);
+    card_end_fit(&need[0]);
     ImGui::SameLine(0, gap);
-    card_begin("##dos", col, true);
+    ImGui::BeginGroup();
+    card_begin("##dos", col, true, NULL, true, sized ? need[1] + floorf(spare / 2) : 0);
     {
         float half = floorf((ImGui::GetContentRegionAvail().x - 10 * u) / 2);
-        ImGui::Dummy(ImVec2(1, 2 * u));
+        ImGui::Dummy(ImVec2(1, 1 * u));
         start_heading("DOS Compatible");
         ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
-        ImGui::TextWrapped("Plays in the original DOS game too. An episode of ten levels and the one hallway they share, "
-                           "saved as that episode's own map files, to copy over a DOS install.");
+        ImGui::TextWrapped("Plays in the original DOS game too.");
         ImGui::PopStyleColor();
-        ImGui::Dummy(ImVec2(1, 2 * u));
         if (start_button(ICON_CREATE_NEW_FOLDER "  New DOS episode", ImVec2(half, 0), true)) open_now = "New DOS episode";
         ImGui::SameLine();
         if (start_button(ICON_FOLDER_OPEN "  Open a DOS episode", ImVec2(half, 0), false)) open_now = "Open a DOS episode";
+        card_tip(0, "An episode of ten levels and the one hallway they share, saved as that episode's own map files "
+                    "(WORLDAL1.DN1 ...), to copy over a DOS install. Plays in Techbot too.");
     }
-    card_end(&need[1], tallest);
+    card_end_fit(&need[1]);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - ImGui::GetStyle().ItemSpacing.y + vgap);
+    card_begin("##patch", col, true, NULL, true, sized ? need[2] + spare - floorf(spare / 2) : 0);
+    {
+        float half = floorf((ImGui::GetContentRegionAvail().x - 10 * u) / 2);
+        ImGui::Dummy(ImVec2(1, 1 * u));
+        start_heading("Patch");
+        ImGui::PushStyleColor(ImGuiCol_Text, T.muted);
+        ImGui::TextWrapped("Changes to the game's own levels, for Techbot.");
+        ImGui::PopStyleColor();
+        if (start_button(ICON_BUILD "  New patch", ImVec2(half, 0), true)) new_patch();
+        ImGui::SameLine();
+        if (start_button(ICON_FOLDER_OPEN "  Open a patch", ImVec2(half, 0), false)) {
+            std::string f = dialog_open_patch(last_dir);
+            if (f.empty()) say("Open: nothing chosen (on Linux this needs zenity)");
+            else open_path(f);
+        }
+        card_tip(1, "Fixes and changes to the stock levels of every episode - holes the wider views show, a harder "
+                    "version - saved as a .PAT holding only the changed cells, nothing of the game. Put it in the game "
+                    "folder's PATCHES folder and Techbot applies it in Enhanced mode.");
+    }
+    card_end_fit(&need[2]);
+    ImGui::EndGroup();
     ImGui::PopStyleVar(2);
     ImGui::EndDisabled();
     if (open_now) ImGui::OpenPopup(open_now);
@@ -4974,9 +5341,9 @@ static void start_screen(float y0)
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(T.accent.x, T.accent.y, T.accent.z, theme_dark ? 0.26f : 0.18f));
     for (size_t i = 0; i < recent.size(); i++) {
         const std::string &r = recent[i];
-        bool there = path_exists(r), dir = path_is_dir(r), epi = path_ext(r) == ".epi";
-        const char *icon = dir ? ICON_FOLDER : epi ? ICON_STACKS : ICON_DESCRIPTION;
-        const char *kind = dir ? "DOS episode" : epi ? "Techbot episode" : "Techbot level";
+        bool there = path_exists(r), dir = path_is_dir(r), epi = path_ext(r) == ".epi", pat = path_ext(r) == ".pat";
+        const char *icon = dir ? ICON_FOLDER : pat ? ICON_BUILD : epi ? ICON_STACKS : ICON_DESCRIPTION;
+        const char *kind = dir ? "DOS episode" : pat ? "Patch" : epi ? "Techbot episode" : "Techbot level";
         ImGui::PushID((int)i);
         ImVec2 p = ImGui::GetCursorScreenPos();
         ImGui::BeginDisabled(!there);
@@ -5152,6 +5519,26 @@ static void play_in_techbot(void)
         if (project_broken()) { say("Note: the checks find something broken in this project (see Checks)."); drawer_open = true; drawer_tab = 0; }
     }
     sync_current();
+    if (proj.patch) {                           /* the stock episode, with this patch (straight into the open level) */
+        std::string path = path_join(pref_dir(), "Shrapnel test.pat"), err;
+        if (!project_save_patch(proj, path, err, false)) { say("Couldn't write the patch for Techbot: " + err); return; }
+        char *base = SDL_GetBasePath();
+        std::string exe = std::string(base ? base : "") +
+#ifdef _WIN32
+            "techbot.exe";
+#else
+            "techbot";
+#endif
+        SDL_free(base);
+        const ProjEntry &e = proj.entries[cur];
+        if (!launch_program({ exe, "--dir", shrapnel_game_dir, "--patch", path, "--episode", std::to_string(e.pep),
+                              "--level-index", std::to_string(e.pslot) }, err)) {
+            say(err + " (Techbot needs to be in the same folder as Shrapnel)");
+            return;
+        }
+        say("Starting Techbot on " + proj.label(cur) + ", with the patch (a test: it applies even in Original mode).");
+        return;
+    }
     Project p = proj;
     if (p.dos) {                                /* ten levels, then the hallway: as the game plays them */
         std::vector<ProjEntry> e;

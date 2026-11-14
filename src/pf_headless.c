@@ -430,6 +430,7 @@ int main(int argc, char **argv)
                 if (*p == ',') p++;
             }
         }
+        else if (!strcmp(argv[i], "--patch") && i + 1 < argc) port_patch_extra = argv[++i];   /* a patch made in Shrapnel */
         else if (!strcmp(argv[i], "--pack") && i + 1 < argc) {   /* a level or episode made in Shrapnel */
             char err[1200];
             if (!pack_open(argv[++i], err, sizeof err)) { fprintf(stderr, "%s\n", err); return 1; }

@@ -131,6 +131,8 @@ void cfg_load(const char *path_in)
             if (n == 2) cfg.hud = HUD_IMMERSIVE;
         }
         else if (!strcmp(k, "volume")) { int n = atoi(v); if (n >= 0 && n <= 5) cfg.volume = n; }
+        else if (!strcmp(k, "patch_off") && *v && cfg.n_patch_off < 32)
+            snprintf(cfg.patch_off[cfg.n_patch_off++], sizeof cfg.patch_off[0], "%s", v);
         else if (!strcmp(k, "episode")) { int e = atoi(v); if (e >= 1 && e <= 3) cfg.episode = e; }
         else if (!strcmp(k, "sound"))         /* (older names: original, overlap, hifi) */
             cfg.sound = !strcmp(v, "classic") || !strcmp(v, "original") ? SND_ORIGINAL
@@ -189,6 +191,8 @@ void cfg_save(const char *path)
     fprintf(f, "# sound: in Enhanced mode: classic (one voice, as DN1.EXE) | improved (effects overlap) | wacky (overlap + reworked sounds)\n");
     fprintf(f, "sound = %s\n", cfg.sound == SND_ORIGINAL ? "classic" : cfg.sound == SND_OVERLAP ? "improved" : "wacky");
     fprintf(f, "scale = %d\nfullscreen = %d\ndeadzone = %d\n", cfg.scale, cfg.fullscreen, cfg.deadzone);
+    fprintf(f, "# patch_off: a patch in the PATCHES folder switched off (one line each; any other applies in Enhanced mode)\n");
+    for (i = 0; i < cfg.n_patch_off; i++) fprintf(f, "patch_off = %s\n", cfg.patch_off[i]);
     fprintf(f, "# quicksave / quickload keys as PC scancodes (0x3f = F5, 0x43 = F9)\n");
     fprintf(f, "key.quicksave = 0x%02x\nkey.quickload = 0x%02x\n", cfg.key_qsave, cfg.key_qload);
     fprintf(f, "# HUD toggle in play (Off <-> Immersive), scancode (0x0f = Tab)\nkey.hud = 0x%02x\n", cfg.key_hud);

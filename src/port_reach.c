@@ -1185,6 +1185,14 @@ static void reach_result(EdReach *out)
         if (!out->finish_ok || R.status != ED_REACH_OK || (nodes[i].flags & N_GOOD)) mark_body(out, &s, ED_REACH_BODY);
         else mark_body(out, &s, ED_REACH_TRAPPED);
         mark_touch(&s);
+        {   /* the camera: anywhere the game lets it lag behind Duke (player.c: he
+               stays 0Ah..12h columns into the view; scroll_x 0..E6h), at his row */
+            int cx, cy = s.sy;
+            if (cy > 90 - 10) cy = 90 - 10;
+            if (cy < 0) cy = 0;
+            for (cx = s.ax - 0x12; cx <= s.ax - 0x0A; cx++)
+                if (cx >= 0 && cx <= 0xE6) out->cam[cy * ED_CAM_W + cx] = 1;
+        }
     }
     for (k = 0; k < ED_MAP_CELLS; k++) {
         if ((out->cell[k] & ED_REACH_TRAPPED) && (out->cell[k] & ED_REACH_BODY)) out->cell[k] &= ~ED_REACH_TRAPPED;

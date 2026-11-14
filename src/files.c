@@ -293,6 +293,7 @@ void save_game(uint8_t slot)
     putw16(hint_5ec8, f); putw16(hint_555a, f); putw16(hint_555b, f); putw16(hint_68f7, f);
     putw16(hint_555c, f); putw16(hint_5553, f); putw16(hint_5555, f); putw16(hint_5c6a, f);
     fprintf(f, ds_str(0x0730), (long)score);
+    patch_save_note(f);                  /* (port) a patched level: which patches (nothing if unpatched) */
     fclose(f);
 }
 
@@ -330,6 +331,7 @@ int restore_game(int slot)
         hint_555a = hint_5ec8 = hint_637e = hint_5554 = hint_5c6b = hint_5a11 = 0;
     }
     if (fscanf(f, ds_str(0x37ED), &sc) == 1) score = (int32_t)sc;
+    patch_restore_note(f);               /* (port) the level's patches when it was saved */
     fclose(f);
     return 1;
 }

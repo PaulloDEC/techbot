@@ -418,6 +418,83 @@ int selftest_projects(Episode &ep)
         if (!project_load_dos(q, ep, d, err, &found)) fail(err);
         else if (found != 11 - removed) fail("partial DOS folder: " + std::to_string(found) + " maps found");
     }
+    {   /* a patch: every episode's stock levels; changes saved as cells only, and made again on loading */
+        checks++;
+        Project a, b;
+        if (!project_new_patch(a, ep, err)) fail("new patch: " + err);
+        else {
+            int eps = 0;
+            for (int e = 1; e <= 3; e++) eps += ep.available[e];
+            if ((int)a.entries.size() != eps * 11) fail("new patch: not 11 maps an episode");
+            for (const ProjEntry &e : a.entries) if (patch_changes(e)) fail("new patch: changes already");
+            ProjEntry &x = a.entries[2], &y = a.entries.back();     /* (episode 1's level 3, the last episode's hallway) */
+            x.map[40 * MAP_W + 12] = 0x1800; x.map[41 * MAP_W + 12] = 0x3011; x.map[0] = 0x0020;
+            y.map[10 * MAP_W + 100] = 0x305E;
+            a.entries[4].drop[0] = "DROP5.DN2";                     /* a level's backdrops and words, no cells */
+            a.entries[4].drop_data[1] = std::string("\x01\x02picture\x00bytes", 15);
+            a.entries[4].own_note = true;
+            a.entries[4].note[0] = "  Indented line";
+            a.entries[4].note[1] = "Second";
+            a.entries[4].note[3] = "Last";
+            y.hnote_own[2] = true;                                  /* a hallway's own words (the one after level 3) */
+            y.hnote[2][0] = "Hallway three"; y.hnote[2][2] = " spaced";
+            a.name = "Test patch = name";
+            a.author = "PaulloDEC";
+            std::string f = path_join(T, "test.pat");
+            if (!project_save_patch(a, f, err)) fail("patch save: " + err);
+            else if (!is_patch_file(f)) fail("patch: not seen as one");
+            else if (!project_load_patch(b, ep, f, err)) fail("patch load: " + err);
+            else {
+                if (b.name != a.name || b.author != a.author) fail("patch: name or author");
+                for (size_t i = 0; i < a.entries.size(); i++)
+                    if (b.entries[i].map != a.entries[i].map) fail("patch round trip: " + a.label((int)i));
+                const ProjEntry &q4 = b.entries[4], &a4 = a.entries[4];
+                if (q4.drop[0] != a4.drop[0] || q4.drop_data[1] != a4.drop_data[1] || !q4.own_note)
+                    fail("patch round trip: a level's backdrops");
+                for (int k = 0; k < 4; k++) if (q4.note[k] != a4.note[k]) fail("patch round trip: note line " + std::to_string(k + 1) + " '" + q4.note[k] + "'");
+                if (patch_changes(q4) || !patch_settings(q4)) fail("patch: settings without cells");
+                const ProjEntry &qy = b.entries.back(), &ay = a.entries.back();
+                for (int h = 0; h < 9; h++) {
+                    if (qy.hnote_own[h] != ay.hnote_own[h]) fail("patch round trip: hallway words, which");
+                    for (int k = 0; k < 4; k++) if (ay.hnote_own[h] && qy.hnote[h][k] != ay.hnote[h][k]) fail("patch round trip: hallway words '" + qy.hnote[h][k] + "'");
+                }
+                if (!b.patch_keep.empty()) fail("patch: sections left over");
+            }
+            /* a map from another release: its section kept as it was, not applied */
+            std::string data;
+            {
+                std::ifstream in(fs::u8path(f), std::ios::binary);
+                std::ostringstream ss; ss << in.rdbuf(); data = ss.str();
+            }
+            Project c;
+            c.patch = true;
+            ProjEntry &w = a.entries[2];
+            w.crc ^= 1;                         /* (as if the player's file were different) */
+            std::string g = path_join(T, "other.pat");
+            if (!project_save_patch(a, g, err) || !project_load_patch(c, ep, g, err)) fail("patch (another release): " + err);
+            else {
+                if (patch_changes(c.entries[2])) fail("patch: a section for another release was applied");
+                if (c.patch_keep.find(w.pfile) == std::string::npos) fail("patch: a section for another release was lost");
+                std::string h = path_join(T, "again.pat");
+                Project d2;
+                if (!project_save_patch(c, h, err) || !project_load_patch(d2, ep, h, err) || d2.patch_keep != c.patch_keep)
+                    fail("patch: a kept section doesn't survive saving");
+            }
+            w.crc ^= 1;
+            /* a stock copy, edited, as a patch */
+            Project s1, s2;
+            if (!project_from_stock(s1, ep, false, 4, err)) fail(err);
+            else {
+                s1.entries[0].map[30 * MAP_W + 30] = 0x1800;
+                if (!project_to_patch(s1, ep, s2, err)) fail("stock copy to patch: " + err);
+                else {
+                    int n = 0;
+                    for (const ProjEntry &e : s2.entries) n += patch_changes(e);
+                    if (n != 1) fail("stock copy to patch: " + std::to_string(n) + " changes, not 1");
+                }
+            }
+        }
+    }
     fs::remove_all(tmp, ec);
     if (folder_snapshot(game) != before) fail("the game folder changed");
     printf("episode %d: %d project checks %s; the game folder is unchanged\n", ep.number, checks, fails ? "FAILED" : "passed");

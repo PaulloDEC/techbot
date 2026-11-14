@@ -1145,6 +1145,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--episode") && i + 1 < argc) ep = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--to-menu")) port_start_at_menu = 1;     /* after an episode switch */
         else if (!strcmp(argv[i], "--pack") && i + 1 < argc) pack_arg = argv[++i];   /* a level or episode made in Shrapnel */
+        else if (!strcmp(argv[i], "--patch") && i + 1 < argc) port_patch_extra = argv[++i];   /* a patch to test (Shrapnel) */
         else if ((!strcmp(argv[i], "--level") || !strcmp(argv[i], "--level-index")) && i + 1 < argc) {
             int raw = argv[i][7] == '-';
             port_start_level = port_parse_level(argv[++i], raw);

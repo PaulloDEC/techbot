@@ -46,6 +46,8 @@ typedef struct {
     int sound;             /* Enhanced mode: SND_ORIGINAL / SND_OVERLAP / SND_HIFI         */
     int episode;           /* 1..3: which DNx.EXE to start (the folder may hold all three) */
     int volume;            /* 0 = off .. 5 = full (Game setup > Sound volume)            */
+    char patch_off[32][64]; /* patches in PATCHES switched off (Game setup > Patches), file names */
+    int n_patch_off;
 } PortConfig;
 
 extern PortConfig cfg;
@@ -234,6 +236,21 @@ extern Pack pack;
 int  pack_open(const char *path, char *err, int errlen);
 void pack_close(void);
 const uint8_t *pack_map(int index);
+/* level patches (port_patch.c): applied to a stock map as it loads */
+extern const char *port_patch_extra;    /* --patch: one more (Shrapnel's test), in Original mode too */
+extern int port_patched;                /* the map just read was patched: Techbot's rules for it */
+void port_patch_map(const char *name, uint8_t *map, size_t len);
+extern uint32_t port_patch_sig;         /* what the patched map came to (0: unpatched) */
+const char *patch_backdrop(int which, const uint8_t **data, long *len);   /* the level's, from a patch */
+const char (*patch_note(int index))[PACK_NOTE_W + 1];                      /* ... its words */
+void patch_save_note(void *f);          /* saved games (a FILE *): the level's patches */
+void patch_restore_note(void *f);
+void patch_restore_warning(void);       /* after restoring: a word if they differ now */
+/* the patches in the PATCHES folder, for Game setup > Patches */
+typedef struct { char file[128]; char name[48]; char author[48]; int maps; } PatchInfo;
+int  patch_list(PatchInfo *out, int max);   /* in file-name order (the order they apply in) */
+int  patch_enabled(const char *file);
+void patch_set_enabled(const char *file, int on);
 int  pack_is_last(int index);
 const char *pack_backdrop(int index, int which, const uint8_t **data, long *len);
 const char (*pack_note(int index))[PACK_NOTE_W + 1];
@@ -261,6 +278,8 @@ void ui_cursor_hold(uint16_t from);      /* ui.c: the spinning cursor's least st
 /* Reachability (port_reach.c): where Duke can get to in a map, found by
  * running the game's own movement code over every state he can be in */
 #define ED_ROUTE 16384
+#define ED_CAM_W 256
+#define ED_CAM_H 96
 enum { ED_REACH_OK, ED_REACH_NO_START, ED_REACH_TOO_BIG };
 #define ED_REACH_BODY    1               /* cell: Duke can be here (and still finish) */
 #define ED_REACH_TRAPPED 2               /* cell: Duke can be here only where there is no way on to the end */
@@ -294,6 +313,9 @@ typedef struct {
     int16_t route[2 * ED_ROUTE];
     int inputs_n;                        /* ... and the controls that play it, a byte a frame */
     uint8_t inputs[ED_ROUTE];            /* (1 left 2 right 4 up 8 down 16 jump 32 fire) */
+    /* where the game's camera can be: the original 208 x 160 view's top-left,
+     * x in 8-pixel steps (0..230), y in rows (0..80): cam[y * ED_CAM_W + x] */
+    uint8_t cam[ED_CAM_W * ED_CAM_H];
 } EdReach;
 int  ed_reach(int slot, const uint16_t *map, const EdReachOpts *opt, EdReach *out);   /* all at once */
 /* in slices: begin, run until it returns 1 (budget = states expanded per

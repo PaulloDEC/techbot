@@ -50,7 +50,15 @@ static std::string run(bool save, const std::string &dir, const std::string &nam
 std::string dialog_open_project(const std::string &dir, bool episodes_only)
 {
     return run(false, dir, "", episodes_only ? L"Techbot episodes (*.epi)\0*.epi\0All files\0*.*\0"
-                                             : L"Techbot levels and episodes (*.lev;*.epi)\0*.lev;*.epi\0All files\0*.*\0");
+                                             : L"Shrapnel projects (*.lev;*.epi;*.pat)\0*.lev;*.epi;*.pat\0All files\0*.*\0");
+}
+std::string dialog_open_patch(const std::string &dir)
+{
+    return run(false, dir, "", L"Techbot patches (*.pat)\0*.pat\0All files\0*.*\0");
+}
+std::string dialog_save_patch(const std::string &dir, const std::string &name)
+{
+    return run(true, dir, name, L"Techbot patch (*.pat)\0*.pat\0", L"pat");
 }
 std::string dialog_save_project(const std::string &dir, const std::string &name, bool episode)
 {
@@ -110,7 +118,18 @@ static std::string run(bool save, const std::string &dir, const std::string &nam
 
 std::string dialog_open_project(const std::string &dir, bool episodes_only)
 {
-    return run(false, dir, "", "Open a project", episodes_only ? "Techbot episodes | *.epi *.EPI" : "Techbot levels and episodes | *.lev *.LEV *.epi *.EPI");
+    return run(false, dir, "", "Open a project", episodes_only ? "Techbot episodes | *.epi *.EPI"
+                                                              : "Shrapnel projects | *.lev *.LEV *.epi *.EPI *.pat *.PAT");
+}
+std::string dialog_open_patch(const std::string &dir)
+{
+    return run(false, dir, "", "Open a patch", "Techbot patches | *.pat *.PAT");
+}
+std::string dialog_save_patch(const std::string &dir, const std::string &name)
+{
+    std::string p = run(true, dir, name, "Save the patch as", "Techbot patch | *.pat *.PAT");
+    if (!p.empty() && (p.size() < 4 || strcasecmp(p.c_str() + p.size() - 4, ".pat") != 0)) p += ".pat";
+    return p;
 }
 std::string dialog_save_project(const std::string &dir, const std::string &name, bool episode)
 {

@@ -38,6 +38,7 @@ void dlg_order_2(void);               /* 108E:0491 */
 void dlg_title_text(void);            /* 108E:3FE1 */
 void dlg_instructions(int x);         /* 108E:1EE1 */
 void dlg_game_setup(int x);           /* 0097:008A */
+void ui_patches(int x);               /* port_options.c */
 void ui_toggle_sound(int x);
 void ui_toggle_hint(int x);
 int  dlg_confirm_quit(int x);         /* 108E:3D1E */
@@ -130,6 +131,7 @@ void show_level_note(void)
 {
     int si = level_index * 4, k;
     const char (*own)[PACK_NOTE_W + 1] = pack_note(level_index);   /* (port) a pack's own text */
+    if (!own) own = patch_note(level_index);   /* (port) or a patch's */
     ui_box(2, 1, 3);
     for (k = 0; k < 4; k++) {
         /* (a pack's entry without text of its own: the stock one, while there is one) */
@@ -661,20 +663,22 @@ static void dlg_enhanced_only(int x)
 
 void dlg_game_setup(int x)
 {
-    ui_box(x, 2, 5);                    /* (port) one row taller than the original's 4 */
+    ui_box(x, 2, 6);                    /* (port) two rows taller than the original's 4 */
     WRITE_MODE_NORMAL();
     dlg_setup_menu_text(x);
     ui_text("O)ptions", x + 6, 12);      /* (port) shown in classic mode too, so the
                                             cursor menus can always be switched back on */
+    ui_text("P)atches", x + 6, 13);      /* (port) level patches from Shrapnel */
     pf_delay_ms(100);
     for (;;) {
-        /* (port) cursor menu: Joystick, Keyboard, Sound, Hints, Options */
+        /* (port) cursor menu: Joystick, Keyboard, Sound, Hints, Options, Patches */
         static int sel;
-        const MenuItem it[5] = { {(uint8_t)(x + 4), 8, 0x24}, {(uint8_t)(x + 4), 9, 0x25},
+        const MenuItem it[6] = { {(uint8_t)(x + 4), 8, 0x24}, {(uint8_t)(x + 4), 9, 0x25},
                                  {(uint8_t)(x + 4), 10, 0x1F}, {(uint8_t)(x + 4), 11, 0x23},
-                                 {(uint8_t)(x + 4), 12, 0x18} };
-        ui_menu_wait(x + 0x18, 0x0C, it, 5, &sel);
+                                 {(uint8_t)(x + 4), 12, 0x18}, {(uint8_t)(x + 4), 13, 0x19} };
+        ui_menu_wait(x + 0x18, 0x0D, it, 6, &sel);
         if (last_scancode == 0x18) { ui_options(x); return; }        /* O (port) */
+        if (last_scancode == 0x19) { ui_patches(x); return; }        /* P (port) */
         /* J/K: in Enhanced mode the controller always works alongside the
          * keyboard (with remapping), so the original's joystick mode - which
          * turns keyboard movement off - has nothing to add (port) */

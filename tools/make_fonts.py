@@ -21,7 +21,7 @@ from fontTools import subset
 NAMES = ('select open_with magic_button edit ink_eraser diagonal_line rectangle format_color_fill colorize undo redo '
          'play_arrow skip_previous sports_esports expand_more expand_less grid_4x4 person label landscape route brick '
          'texture lock lock_open task_alt add remove drag_indicator search error warning info history close settings '
-         'folder_open save palette dark_mode light_mode check chevron_right more_vert visibility zoom_in zoom_out help description folder note_add create_new_folder file_open check_circle stacks').split()
+         'folder_open save palette dark_mode light_mode check chevron_right more_vert visibility zoom_in zoom_out help description folder note_add create_new_folder file_open check_circle stacks build healing').split()
 FILLED = 'play_arrow error warning lock'.split()
 FILLED_BASE = 0xF8B0            # the filled glyphs' own codepoints
 

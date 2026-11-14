@@ -42,12 +42,16 @@ int Project::number(int i) const                /* 1-based among its kind */
 int Project::slot_of(int i) const
 {
     const ProjEntry &e = entries[i];
+    if (patch) return e.pslot;
     if (e.hallway) return std::min(number(i) - 1, 9) * 2 + 1;
     return (std::max(1, std::min(10, e.backdrop)) - 1) * 2;
 }
 
 std::string Project::label(int i) const
 {
+    if (patch)
+        return "Episode " + std::to_string(entries[i].pep) + ", " +
+               (entries[i].hallway ? std::string("hallway") : "level " + std::to_string(entries[i].pslot / 2 + 1));
     if (!entries[i].hallway) return "Level " + std::to_string(number(i));
     if (dos) return "Hallway (between all levels)";
     return "Hallway " + std::to_string(number(i));
@@ -60,15 +64,17 @@ CheckContext Project::check_context(int i) const
     cx.episode = episode;
     cx.hallway = entries[i].hallway;
     int last = -1;
-    for (int k = 0; k < (int)entries.size(); k++) if (!entries[k].hallway) last = k;
+    for (int k = 0; k < (int)entries.size(); k++) if (!entries[k].hallway && entries[k].pep == entries[i].pep) last = k;
     cx.last = !cx.hallway && i == last;
-    for (int k = 0; k < i; k++)                 /* boots, claws and the robot hand stay with Duke */
-        for (uint16_t v : entries[k].map) if (item_base(v) == 0x3020) { cx.robohand_before = true; break; }
+    for (int k = 0; k < i; k++)                 /* boots, claws and the robot hand stay with Duke (in its episode) */
+        if (entries[k].pep == entries[i].pep && !(patch && entries[k].hallway))
+            for (uint16_t v : entries[k].map) if (item_base(v) == 0x3020) { cx.robohand_before = true; break; }
     return cx;
 }
 
 std::string Project::kind_name() const
 {
+    if (patch) return "Patch (.PAT)";
     if (dos) return "DOS episode";
     return episode ? "Techbot episode (.EPI)" : "Techbot level (.LEV)";
 }
@@ -153,6 +159,7 @@ bool project_from_stock(Project &p, const Episode &ep, bool dos, int slot, std::
         if (slot & 1 || slot > 18) { err = "Only the ten levels can be opened on their own."; return false; }
         if (!stock_map(ep, slot, m)) { err = "Could not read " + ep.slot_file(slot) + " from the game folder."; return false; }
         p.entries.push_back(make_entry(false, slot / 2 + 1, m));
+        p.entries.back().pep = ep.number; p.entries.back().pslot = slot; p.entries.back().pfile = stock_file(ep, ep.number, slot);
         p.name = "Episode " + std::to_string(ep.number) + ", level " + std::to_string(slot / 2 + 1);
         return true;
     }
@@ -161,14 +168,17 @@ bool project_from_stock(Project &p, const Episode &ep, bool dos, int slot, std::
     for (int k = 0; k < 10; k++) {
         if (!stock_map(ep, k * 2, m)) { err = "Could not read " + ep.slot_file(k * 2) + " from the game folder."; return false; }
         p.entries.push_back(make_entry(false, k + 1, m));
+        p.entries.back().pep = ep.number; p.entries.back().pslot = k * 2; p.entries.back().pfile = stock_file(ep, ep.number, k * 2);
         if (!dos && k < 9) {
             if (!stock_map(ep, k * 2 + 1, m)) { err = "Could not read " + ep.slot_file(k * 2 + 1) + "."; return false; }
             p.entries.push_back(make_entry(true, 1, m));
+            p.entries.back().pep = ep.number; p.entries.back().pslot = 1; p.entries.back().pfile = stock_file(ep, ep.number, 1);
         }
     }
     if (dos) {
         if (!stock_map(ep, 1, m)) { err = "Could not read " + ep.slot_file(1) + "."; return false; }
         p.entries.push_back(make_entry(true, 1, m));
+        p.entries.back().pep = ep.number; p.entries.back().pslot = 1; p.entries.back().pfile = stock_file(ep, ep.number, 1);
     }
     return true;
 }
@@ -619,3 +629,302 @@ std::string path_dir(const std::string &p)
     return d.empty() ? std::string(".") : d;
 }
 std::string path_ext(const std::string &p) { return lower(upath(p).extension().u8string()); }
+
+/* ---------------------------------------------------------------- patches
+ * A patch is a zip (.PAT) holding PATCH.INI:
+ *
+ *     ; Techbot level patch, made in Shrapnel - see BUILDING.md
+ *     name   = Wide fixes
+ *     author = ...
+ *
+ *     [WORLDAL3.DN1]                the stock map file it changes
+ *     crc32 = 1A2B3C4D              the file's checksum (its first 23040 bytes), so
+ *                                   only the release it was made from is changed
+ *     cell  = 12 40 1800            column, row, the new value (hex); one per cell
+ *     backdrop_a = DROP5.DN2        a level's backdrops, as in a .LEV: a game file, or a
+ *     backdrop_b = WORLDAL3B.DRP      picture of its own kept in the zip under that name
+ *     note  = One|Two|Three|Four    a level's own words
+ *     note_after_3 = ...            the hallway map's section: the words of the hallway
+ *                                   after level 3 (each hallway has its own)
+ *
+ * Only maps with changes are in it, and of those only the changed cells:
+ * nothing else of the game.  Techbot applies it in Enhanced mode as each map
+ * loads.  In Shrapnel the .PAT is the project too: opening one starts from the
+ * stock maps in the game folder and makes its changes again. */
+
+std::string stock_file(const Episode &ep, int e, int slot)
+{
+    std::string n = ep.slot_file(slot);         /* (the loaded episode's names, with episode e's extension) */
+    for (char &c : n) c = (char)toupper((unsigned char)c);
+    if (!n.empty()) n[n.size() - 1] = (char)('0' + e);
+    return n;
+}
+
+bool stock_file_map(const std::string &name, std::vector<uint16_t> &m, uint32_t *crc)
+{
+    std::string data;
+    if (name.empty() || !read_all(game_path(name.c_str()), data)) return false;
+    if (data.size() > ED_MAP_CELLS * 2) data.resize(ED_MAP_CELLS * 2);
+    if (crc) *crc = (uint32_t)mz_crc32(MZ_CRC32_INIT, (const unsigned char *)data.data(), data.size());
+    data.resize(ED_MAP_CELLS * 2, 0);           /* (a short file: the rest as the game leaves it, empty) */
+    return bytes_map(data.data(), data.size(), m);
+}
+
+bool patch_settings(const ProjEntry &e)
+{
+    if (e.hallway) { for (bool b : e.hnote_own) if (b) return true; return false; }
+    return !e.drop[0].empty() || !e.drop[1].empty() || !e.drop_data[0].empty() || !e.drop_data[1].empty() || e.own_note;
+}
+
+static std::string patch_pic_name(const ProjEntry &e, int k)
+{
+    std::string m = e.pfile;
+    return m.substr(0, m.rfind('.')) + (k ? "B" : "A") + ".DRP";
+}
+
+int patch_changes(const ProjEntry &e)
+{
+    if (e.orig.size() != e.map.size()) return 0;
+    int n = 0;
+    for (size_t i = 0; i < e.map.size(); i++) n += e.map[i] != e.orig[i];
+    return n;
+}
+
+/* every episode in the game folder: its ten levels, then the hallway they share */
+bool project_new_patch(Project &p, const Episode &ep, std::string &err)
+{
+    p = Project();
+    p.patch = true;
+    p.episode = true;
+    p.ep = ep.number;
+    p.name = "New patch";
+    p.fresh = true;
+    for (int e = 1; e <= 3; e++) {
+        if (!ep.available[e]) continue;
+        for (int k = 0; k <= 10; k++) {
+            int slot = k < 10 ? k * 2 : 1;
+            ProjEntry en = make_entry(k == 10, k < 10 ? k + 1 : 1, {});
+            en.pep = e;
+            en.pslot = slot;
+            en.pfile = stock_file(ep, e, slot);
+            if (!stock_file_map(stock_file(ep, e, slot), en.orig, &en.crc)) {
+                err = "Could not read " + stock_file(ep, e, slot) + " from the game folder.";
+                return false;
+            }
+            en.map = en.orig;
+            p.entries.push_back(std::move(en));
+        }
+    }
+    if (p.entries.empty()) { err = "No episode in the game folder."; return false; }
+    return true;
+}
+
+static char hexd(int v) { return "0123456789ABCDEF"[v & 15]; }
+
+bool project_save_patch(const Project &p, const std::string &path, std::string &err, bool keep_bak)
+{
+    std::ostringstream o;
+    o << "; Techbot level patch, made in Shrapnel - see BUILDING.md\n";
+    o << "; For each stock map file it changes: that file's checksum, and the changed cells.\n";
+    o << "name   = " << p.name << "\n";
+    o << "author = " << p.author << "\n";
+    for (const ProjEntry &e : p.entries) {
+        if (!patch_changes(e) && !patch_settings(e)) continue;
+        char crc[9];
+        for (int k = 0; k < 8; k++) crc[k] = hexd((int)(e.crc >> (28 - k * 4)));
+        crc[8] = 0;
+        o << "\n[" << e.pfile << "]\n";
+        o << "crc32 = " << crc << "\n";
+        for (int i = 0; i < ED_MAP_CELLS; i++)
+            if (e.map[i] != e.orig[i]) {
+                char v[5] = { hexd(e.map[i] >> 12), hexd(e.map[i] >> 8), hexd(e.map[i] >> 4), hexd(e.map[i]), 0 };
+                o << "cell  = " << i % MAP_W << " " << i / MAP_W << " " << v << "\n";
+            }
+        if (!e.hallway) {
+            for (int k = 0; k < 2; k++) {
+                if (!e.drop_data[k].empty()) o << (k ? "backdrop_b = " : "backdrop_a = ") << patch_pic_name(e, k) << "\n";
+                else if (!e.drop[k].empty()) o << (k ? "backdrop_b = " : "backdrop_a = ") << e.drop[k] << "\n";
+            }
+            if (e.own_note) {
+                o << "note  = ";
+                for (int k = 0; k < 4; k++) o << (k ? "|" : "") << e.note[k];
+                o << "\n";
+            }
+        } else
+            for (int h = 0; h < 9; h++)         /* (each hallway's words: note_after_<level>) */
+                if (e.hnote_own[h]) {
+                    o << "note_after_" << h + 1 << " = ";
+                    for (int k = 0; k < 4; k++) o << (k ? "|" : "") << e.hnote[h][k];
+                    o << "\n";
+                }
+    }
+    o << p.patch_keep;
+    std::string ini = o.str();
+    mz_zip_archive z;
+    memset(&z, 0, sizeof z);
+    if (!mz_zip_writer_init_heap(&z, 0, 16 * 1024)) { err = "Could not start the zip"; return false; }
+    bool ok = mz_zip_writer_add_mem(&z, "PATCH.INI", ini.data(), ini.size(), MZ_BEST_COMPRESSION) != 0;
+    for (const ProjEntry &e : p.entries)        /* (pictures of its own) */
+        for (int k = 0; k < 2 && ok; k++)
+            if (!e.hallway && !e.drop_data[k].empty())
+                ok = mz_zip_writer_add_mem(&z, patch_pic_name(e, k).c_str(), e.drop_data[k].data(), e.drop_data[k].size(), MZ_BEST_COMPRESSION) != 0;
+    for (const auto &kv : p.patch_keep_files)   /* (and those of sections kept as they were) */
+        if (ok) ok = mz_zip_writer_add_mem(&z, kv.first.c_str(), kv.second.data(), kv.second.size(), MZ_BEST_COMPRESSION) != 0;
+    void *buf = NULL;
+    size_t n = 0;
+    ok = ok && mz_zip_writer_finalize_heap_archive(&z, &buf, &n);
+    if (ok) ok = write_all(path, buf, n, keep_bak, err);
+    else err = "Could not build the zip";
+    mz_zip_writer_end(&z);
+    return ok;
+}
+
+bool is_patch_file(const std::string &path)
+{
+    std::string data, ini;
+    if (!read_all(path, data)) return false;
+    mz_zip_archive z;
+    memset(&z, 0, sizeof z);
+    if (!mz_zip_reader_init_mem(&z, data.data(), data.size(), 0)) return false;
+    bool ok = mz_zip_reader_locate_file(&z, "PATCH.INI", NULL, 0) >= 0;
+    mz_zip_reader_end(&z);
+    return ok;
+}
+
+bool project_load_patch(Project &p, const Episode &ep, const std::string &path, std::string &err, std::string *notes)
+{
+    std::string data, ini;
+    if (!read_all(path, data)) { err = "Could not read " + path; return false; }
+    mz_zip_archive z;
+    memset(&z, 0, sizeof z);
+    if (!mz_zip_reader_init_mem(&z, data.data(), data.size(), 0)) { err = "Not a patch (not a zip file): " + path; return false; }
+    bool ok = zip_get(z, "PATCH.INI", ini);
+    if (!ok) { mz_zip_reader_end(&z); err = "Not a patch (no PATCH.INI inside): " + path; return false; }
+    if (!project_new_patch(p, ep, err)) { mz_zip_reader_end(&z); return false; }
+    p.fresh = false;
+    p.path = path;
+    /* by hand rather than ini_parse: a section has many "cell" lines */
+    std::istringstream in(ini);
+    std::string line, section, keep;
+    ProjEntry *en = NULL;
+    bool matched = false;
+    uint32_t want = 0;
+    std::vector<std::string> skipped;
+    auto end_section = [&]() {
+        if (!section.empty() && !matched) { p.patch_keep += "\n" + keep; skipped.push_back(section); }
+        keep.clear();
+    };
+    while (std::getline(in, line)) {
+        std::string t = trim(line);
+        if (t.empty() || t[0] == ';' || t[0] == '#') continue;
+        if (t[0] == '[') {
+            end_section();
+            size_t e = t.find(']');
+            section = trim(t.substr(1, e == std::string::npos ? std::string::npos : e - 1));
+            for (char &c : section) c = (char)toupper((unsigned char)c);
+            keep = "[" + section + "]\n";
+            en = NULL;
+            for (ProjEntry &x : p.entries) if (x.pfile == section) en = &x;
+            matched = false;
+            continue;
+        }
+        size_t eq = t.find('=');
+        if (eq == std::string::npos) continue;
+        std::string k = lower(trim(t.substr(0, eq))), v = trim(t.substr(eq + 1));
+        if (section.empty()) {
+            if (k == "name") p.name = v;
+            else if (k == "author") p.author = v;
+            continue;
+        }
+        keep += t + "\n";
+        if ((k == "backdrop_a" || k == "backdrop_b") && !matched) {   /* (a kept section's picture goes with it) */
+            std::string pic;
+            if (zip_get(z, v, pic)) p.patch_keep_files[v] = pic;
+        }
+        if (k == "crc32") {
+            want = (uint32_t)strtoul(v.c_str(), NULL, 16);
+            matched = en && en->crc == want;
+        } else if (k == "cell" && matched) {
+            int c = -1, r = -1;
+            unsigned val = 0;
+            if (sscanf(v.c_str(), "%d %d %x", &c, &r, &val) == 3 && c >= 0 && c < MAP_W && r >= 0 && r < MAP_H && val <= 0xFFFF)
+                en->map[r * MAP_W + c] = (uint16_t)val;
+        } else if ((k == "backdrop_a" || k == "backdrop_b") && matched && !en->hallway) {
+            int kk = k == "backdrop_b";
+            std::string pic;
+            if (zip_get(z, v, pic)) { en->drop_data[kk] = pic; en->drop[kk].clear(); }
+            else { en->drop[kk] = v; en->drop_data[kk].clear(); }
+        } else if (matched && ((k == "note" && !en->hallway) || (k.compare(0, 11, "note_after_") == 0 && en->hallway))) {
+            std::string raw = line.substr(line.find('=') + 1);   /* (as written: a line's own spaces kept) */
+            while (!raw.empty() && (raw.back() == '\r' || raw.back() == '\n')) raw.pop_back();
+            if (!raw.empty() && raw[0] == ' ') raw = raw.substr(1);
+            std::string *dst = en->note;
+            if (en->hallway) {
+                int h = atoi(k.c_str() + 11) - 1;
+                if (h < 0 || h > 8) continue;
+                en->hnote_own[h] = true;
+                dst = en->hnote[h];
+            } else en->own_note = true;
+            for (int n = 0; n < 4; n++) {
+                size_t bar = raw.find('|');
+                dst[n] = raw.substr(0, bar);
+                raw = bar == std::string::npos ? "" : raw.substr(bar + 1);
+            }
+        }
+    }
+    mz_zip_reader_end(&z);
+    end_section();
+    if (notes && !skipped.empty()) {
+        *notes = "Kept as they were, not shown: the changes to ";
+        for (size_t i = 0; i < skipped.size(); i++) *notes += (i ? ", " : "") + skipped[i];
+        *notes += " (a different release of the game, or an episode not in the game folder).";
+    }
+    return true;
+}
+
+/* a stock copy (a level or an episode, edited) as a patch: each entry back
+ * on the stock map it came from, with its backdrops and words.  Refused if it
+ * no longer lines up: levels added, removed or reordered, or the hallways
+ * made different from each other (their words may differ: a patch keeps
+ * each hallway's). */
+bool project_to_patch(const Project &from, const Episode &ep, Project &p, std::string &err)
+{
+    if (from.patch) { err = "It is a patch already."; return false; }
+    for (const ProjEntry &e : from.entries)
+        if (e.pep < 1 || e.pslot < 0) { err = "Only a stock level or episode, opened from the game folder, can be saved as a patch."; return false; }
+    if (!project_new_patch(p, ep, err)) return false;
+    p.name = from.name;
+    p.author = from.author;
+    std::map<std::pair<int, int>, const ProjEntry *> seen;
+    int hall_no = 0, hall_ep = 0;
+    for (const ProjEntry &e : from.entries) {
+        if (e.hallway) {                        /* (a stock copy's hallways: each one's words, by its place) */
+            if (e.pep != hall_ep) { hall_ep = e.pep; hall_no = 0; }
+            int h = from.dos ? -1 : hall_no++;
+            if (e.own_note && h >= 0 && h < 9)
+                for (ProjEntry &x : p.entries)
+                    if (x.pep == e.pep && x.hallway) {
+                        x.hnote_own[h] = true;
+                        for (int k = 0; k < 4; k++) x.hnote[h][k] = e.note[k];
+                    }
+        }
+        auto key = std::make_pair(e.pep, e.pslot);
+        auto it = seen.find(key);
+        if (it != seen.end() && it->second->map != e.map) {
+            err = "Its hallways are different from each other; in the game they are one map, so a patch can only change them alike.";
+            return false;
+        }
+        seen[key] = &e;
+        for (ProjEntry &x : p.entries)
+            if (x.pep == e.pep && x.pslot == e.pslot) {
+                x.map = e.map;
+                if (!x.hallway)
+                    for (int k = 0; k < 4; k++) {
+                        if (k < 2) { x.drop[k] = e.drop[k]; x.drop_data[k] = e.drop_data[k]; }
+                        x.note[k] = e.note[k];
+                    }
+                if (!x.hallway) x.own_note = e.own_note;
+            }
+    }
+    return true;
+}

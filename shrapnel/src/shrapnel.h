@@ -214,6 +214,16 @@ struct ProjEntry {                              /* a level or a hallway */
     std::string drop[2], drop_data[2];
     bool own_note = false;                      /* Techbot projects: its own note / Dr. Proton text */
     std::string note[4];
+    /* a stock map (a patch's entries; a stock copy's, until saved): whose,
+     * as it is in the game's file, and that file's checksum */
+    int pep = 0, pslot = -1;                    /* episode 1..3 (0 = none), its level table slot */
+    std::string pfile;                          /* its file ("WORLDAL3.DN1") */
+    std::vector<uint16_t> orig;                 /* a patch: the map as the game's file has it */
+    /* a patch's hallway: one map for all nine hallways of the episode, but each
+     * hallway its own words: [n] for the hallway after level n + 1 */
+    bool hnote_own[9] = {};
+    std::string hnote[9][4];
+    uint32_t crc = 0;
 };
 /* a clear as a file (inside a project's zip) */
 std::string clear_bytes(const Clear &c);
@@ -229,6 +239,9 @@ struct Project {
     int ending = 1;                             /* Techbot episode: stock ending 1..3, 0 = custom text */
     std::string ending_text;
     bool meta_dirty = false;                    /* levels added or removed, details changed */
+    bool patch = false;                         /* a patch: changes to the stock levels (all episodes here) */
+    std::string patch_keep;                     /* a patch: its sections for maps not here (another release, a missing episode), kept as they were */
+    std::map<std::string, std::string> patch_keep_files;   /* ... and the pictures they name */
     std::vector<ProjEntry> entries;             /* in play order: level, hallway, level... (DOS: ten levels, then the hallway) */
     int count(bool hallways) const;
     int number(int i) const;                    /* 1-based among levels, or among hallways */
@@ -248,6 +261,18 @@ bool project_save_zip(const Project &p, const std::string &path, std::string &er
 bool project_load_zip(Project &p, const std::string &path, std::string &err, std::map<std::string, std::string> *top = NULL);
 bool project_save_dos(const Project &p, const Episode &ep, const std::string &dir, std::string &err);
 bool project_load_dos(Project &p, const Episode &ep, const std::string &dir, std::string &err, int *from_folder = NULL);
+/* patches: changes to the stock levels of the episodes in the game folder,
+ * saved as a .PAT (a zip holding PATCH.INI: per map file, its checksum and
+ * the changed cells only - nothing else of the game) */
+std::string stock_file(const Episode &ep, int e, int slot);   /* episode e's file for a slot, upper case ("WORLDAL3.DN1") */
+bool stock_file_map(const std::string &name, std::vector<uint16_t> &m, uint32_t *crc);   /* read it from the game folder */
+bool project_new_patch(Project &p, const Episode &ep, std::string &err);
+bool project_save_patch(const Project &p, const std::string &path, std::string &err, bool keep_bak = true);
+bool project_load_patch(Project &p, const Episode &ep, const std::string &path, std::string &err, std::string *notes = NULL);
+bool is_patch_file(const std::string &path);   /* a zip with PATCH.INI in it */
+int  patch_changes(const ProjEntry &e);         /* cells that differ from the stock map */
+bool patch_settings(const ProjEntry &e);        /* a level's own backdrops or words */
+bool project_to_patch(const Project &from, const Episode &ep, Project &p, std::string &err);   /* a stock copy, edited, as a patch */
 int  dos_folder_episode(const std::string &dir);   /* 1..3 by its map files, 0 = none */
 bool same_folder(const std::string &a, const std::string &b);
 bool path_is_dir(const std::string &p);
@@ -264,6 +289,8 @@ std::string dialog_open_map(const std::string &dir);
 std::string dialog_save_map(const std::string &dir, const std::string &name);
 std::string dialog_open_project(const std::string &dir, bool episodes_only);   /* .LEV / .EPI */
 std::string dialog_save_project(const std::string &dir, const std::string &name, bool episode);
+std::string dialog_open_patch(const std::string &dir);
+std::string dialog_save_patch(const std::string &dir, const std::string &name);
 std::string dialog_folder(const std::string &dir, const char *title);
 std::string dialog_open_picture(const std::string &dir);   /* a .PNG */
 bool launch_program(const std::vector<std::string> &args, std::string &err);   /* filedlg.cpp: not waited for */

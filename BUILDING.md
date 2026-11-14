@@ -649,6 +649,97 @@ Stock levels and episodes open as copies: the first save asks where.  If
 Shrapnel closed with a new project unsaved, the start screen offers it back.
 **File > Start screen** returns there.
 
+### Patches
+
+A **patch** changes the stock levels themselves - fixes for Techbot's wider
+views, a harder version of an episode - without anything of the game in it.
+A patch file (`.PAT`) is a zip holding `PATCH.INI`: for each stock map file
+it changes, that file's checksum and only the changed cells.
+
+```
+; Techbot level patch, made in Shrapnel - see BUILDING.md
+name   = Wide fixes
+author = ...
+
+[WORLDAL3.DN1]
+crc32 = 1A2B3C4D        CRC-32 of the file's first 23040 bytes (its map)
+cell  = 12 40 1800      column, row, the new value (hex); one line a cell
+backdrop_a = DROP5.DN2  a level's backdrop A (B: backdrop_b) - a game file of any
+                        episode, or a picture of its own kept in the zip (WORLDAL3B.DRP)
+note  = One|Two|Three|Four   a level's own words (note monitor, Dr. Proton screen)
+note_after_3 = ...      (the hallway map's section) the words of the hallway after
+                        level 3: every hallway shares the map, each has its own words
+```
+
+**In Techbot:** put patches in a folder called `PATCHES` inside the game
+folder.  In Enhanced mode, as each stock map loads, every patch there is
+applied to it in memory, in file-name order (a later one wins where two
+change the same cell); the files on disk are never changed.  A section whose
+checksum doesn't match the player's file (a different release of the
+episode) is skipped, and `TECHBOT.LOG` says so.  Patches never apply in
+Original mode, which stays bit-identical, nor to the game's own demo (it
+would drift), nor to a pack's maps.  (A new game records its first level as
+the user demo, as the original does; that is patched like any play, and
+plays back the same way.)  A patched map plays by
+Techbot's rules where they differ (the see-through actors over backdrop B),
+an unpatched one exactly as before.  A patched level also takes the patch's
+backdrops and words, if it has any; a hallway takes the words the patch gives
+that hallway (every hallway of an episode shares one map, but each has its
+own words).  A saved game made on a patched level notes which
+patches it had (a line after the original's data, which the DOS game
+ignores; a save on an unpatched level is unchanged); restoring it where the
+level is patched differently, or not at all, says so before play goes on, in
+case Duke stands where the map has changed.  **Game setup > Patches** lists the patches in
+the folder (each one's name, from its `PATCH.INI`, in the order they apply)
+and switches each on or off (Enter, or left / right; with more than nine,
+left / right turn the pages); a new one is on.  A change shows the next time
+a level starts.  The ones switched off are kept in `TECHBOT.CFG`
+(`patch_off = <file>`, a line each).  `techbot --patch <file>` applies one
+more for that run, even in Original mode: Shrapnel's *Play in Techbot* uses
+it, with `--episode` and `--level-index`, to start straight in the level
+shown.
+
+**In Shrapnel:** *New patch* (the start screen's Patch card) opens the stock
+levels of every episode in the game folder - ten levels and the hallway each
+- listed by episode; each episode's levels show with its own art.  Edit them
+with all of Techbot's features.  The changed cells are marked on the map
+(View > *Changed cells*), the level list counts them, and *Edit > Back to the
+original* (or the button under the list) puts the selection's cells - or,
+with none, the whole level's - back as the game has them, undoably.  Levels
+can't be added, removed or reordered.  A level's backdrops and its message
+can be changed as in a Techbot project (the level list marks them +).  The
+hallway map is shared by all nine hallways and keeps the backdrops of the
+level before each, but each hallway's words can be changed: the message
+window picks which hallway.  Saving writes the `.PAT` (only maps with changes);
+copy it into the game folder's `PATCHES` folder.  Opening a `.PAT` starts
+from the stock maps in the game folder and makes its changes again; a section
+for a file that isn't there or doesn't match is kept as it was and written
+back on saving.  *File > Save as a patch...* turns a stock level or episode
+opened as a copy (and not saved since) into a patch, as long as it still
+lines up with the stock maps: no levels added or moved, and its hallways'
+maps alike (their words may differ; each hallway's are kept).
+
+### Techbot's views
+
+Techbot's wider views (Wide, Immersive) show more of a level around the
+original's 208 x 160 window, which can expose holes and unfinished edges the
+original never showed.  **View > Techbot views** helps find them, in any
+project (it is made for patches):
+
+- **Frames at the mouse** draws the original view (white) and the chosen
+  wider one (the accent colour) around the cell under the mouse, the wider
+  one placed as Techbot places it: centred on the original, stopped at the
+  map's edges, a taller one centred too.
+- **Cells only wider views show** marks, hatched in the warning colour,
+  every cell the chosen wider view can show that the original never does,
+  from every place the game's camera can be.  The camera positions come from
+  the Reach search (each state Duke can be in, with the camera anywhere the
+  game lets it lag behind him), so the marks appear once Reach has searched
+  the level; the status line counts them.
+- The wider view to check against: Wide 16:9 (312 x 160), Wide 21:9 (456 x
+  160), Immersive 16:9 (424 x 200), Immersive 21:9 (568 x 200), or the
+  widest Techbot draws (640 x 200).
+
 ### Projects and saving
 
 - A **Techbot level** saves as a `.LEV` file, a **Techbot episode** as an
