@@ -663,7 +663,7 @@ static void dlg_enhanced_only(int x)
 
 void dlg_game_setup(int x)
 {
-    ui_box(x, 2, 6);                    /* (port) two rows taller than the original's 4 */
+    ui_box(x, 2, 5);                    /* (port) two text rows (one tile row) taller than the original's 4 */
     WRITE_MODE_NORMAL();
     dlg_setup_menu_text(x);
     ui_text("O)ptions", x + 6, 12);      /* (port) shown in classic mode too, so the

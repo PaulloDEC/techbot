@@ -507,6 +507,31 @@ python tools\extract_images.py C:\games\duke1            # -> C:\games\duke1\ext
 python tools\extract_images.py C:\games\duke1 D:\art     # or a folder of your choice
 ```
 
+### Difference art (shipping wide art without the game's pixels)
+
+Wide art made by widening an original's canvas still holds the original's
+pixels.  `tools/art_diff.py` makes, from a folder of originals (as
+`extract_images.py` writes them) and a folder of wide art of the same names,
+a folder of **difference** PNGs: each the wide art with every pixel that is
+the original's at that place made see-through, and a `techbot-base` text
+chunk saying where the original sits (`DROP9.DN1.png 1 52 0`: the original,
+its enlargement, its position - same height and centred is tried first,
+otherwise it is searched for).  It rebuilds each one and checks it gives the
+wide art back exactly before writing it; `--tolerance N` lets colours that
+close count as the same.  Needs Pillow and numpy.
+
+```powershell
+pip install pillow numpy
+python tools\art_diff.py originals widescreen difference
+```
+
+The difference PNGs go in `widescreen\` like any replacement art.  Techbot
+sees the note, decodes that original from the player's own game files, and
+lays it under the difference in memory - the same picture, with nothing of
+the game shipped and nothing written.  Without that game file (an episode the
+player doesn't have) the art isn't used, and the log says so.  Original
+pixels copied to another place in the wide art stay in the difference.
+
 ### Controller button names in prompts
 
 When a controller was used last, prompts such as "press Enter" name its

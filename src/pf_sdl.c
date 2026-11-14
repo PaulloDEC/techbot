@@ -85,22 +85,82 @@ const char *game_path(const char *name)
 }
 
 /* ------------------------------------------------------------ audio:
- * the PIT channel 2 square wave that drives the PC speaker */
+ * the PIT channel 2 square wave that drives the PC speaker.
+ *
+ * The game sets a new divisor every timer tick (1193182/8273 Hz, about
+ * 6.9 ms), but on this thread, in real time, while the sound card asks for
+ * samples in blocks of 512.  Reading the divisor once per block would put
+ * each step at the next block's start - a different place each time, so the
+ * same sound came out a little different every time it played.  So each
+ * tick's divisor is queued and the sound is made from the queue, one tick
+ * every audio_rate * 8273 / 1193182 samples exactly, as the real timer
+ * would; a few ticks are kept in hand to take up the game thread's
+ * unevenness. */
+#define SPK_Q 64                       /* ring of per-tick divisors (power of two) */
+#define SPK_KEEP 3                     /* ticks kept in hand */
+static uint16_t spk_q[SPK_Q];
+static SDL_atomic_t spk_head, spk_tail; /* written by the game / audio thread */
+
+static void spk_tick(void)             /* game thread: after each timer tick */
+{
+    int h = SDL_AtomicGet(&spk_head);
+    if (h - SDL_AtomicGet(&spk_tail) >= SPK_Q) return;   /* full (audio stopped): drop */
+    spk_q[h & (SPK_Q - 1)] = spk_div;
+    SDL_MemoryBarrierRelease();
+    SDL_AtomicSet(&spk_head, h + 1);
+}
+
 static void audio_cb(void *ud, Uint8 *stream, int len)
 {
-    static double phase;
+    static double phase, left;         /* square-wave phase; samples left of this tick */
+    static uint16_t cur;               /* this tick's divisor */
+    static int primed, starved;
+    static double avg, trim;
     int16_t *s = (int16_t *)stream;
     int n = len / 2, i;
-    double freq = spk_div ? 1193182.0 / spk_div : 0.0;
+    double per_tick = (double)audio_rate * 8273.0 / 1193182.0;
+    double aim = SPK_KEEP + n / per_tick;   /* waiting as a block starts: what it uses, and some in hand */
+    double step = cur ? 1193182.0 / cur / audio_rate : 0.0;
     (void)ud;
+    {   /* stay about SPK_KEEP ticks behind the game: the two clocks (the
+         * sound card's and the computer's) drift apart very slowly, so the
+         * average of what is waiting nudges the tick length by at most
+         * 2% (the pitch is unchanged; a sound lasts a hair longer) */
+        int have = SDL_AtomicGet(&spk_head) - SDL_AtomicGet(&spk_tail);
+        avg += (have - avg) * 0.02;
+        trim = (avg - aim) * 0.005;
+        if (trim > 0.02) trim = 0.02;
+        if (trim < -0.02) trim = -0.02;
+    }
     if (port_sound_mixing()) {
+        SDL_AtomicSet(&spk_tail, SDL_AtomicGet(&spk_head));   /* not ours: keep the queue empty */
+        primed = 0; cur = 0;
         port_sound_render(s, n, audio_rate);
         if (cfg.volume < 5) for (i = 0; i < n; i++) s[i] = (int16_t)(s[i] * cfg.volume / 5);
         return;
     }
     for (i = 0; i < n; i++) {
-        if (freq <= 0.0) { s[i] = 0; continue; }
-        phase += freq / audio_rate;
+        if (left <= 0.0) {             /* the next tick */
+            int t = SDL_AtomicGet(&spk_tail), have = SDL_AtomicGet(&spk_head) - t;
+            if (have > aim + 8) { t += have - (int)aim; have = (int)aim; }   /* far behind (a stall, a pause): catch up */
+            if (!primed && have >= SPK_KEEP) primed = 1;
+            if (primed && have > 0) {
+                SDL_MemoryBarrierAcquire();
+                cur = spk_q[t & (SPK_Q - 1)];
+                SDL_AtomicSet(&spk_tail, t + 1);
+                starved = 0;
+            } else {                   /* ran dry: hold the note a moment, then fall silent */
+                SDL_AtomicSet(&spk_tail, t);
+                primed = 0;
+                if (++starved > 2) cur = 0;
+            }
+            left += per_tick * (1.0 - trim);
+            if (left <= 0.0) left = per_tick;
+            step = cur ? 1193182.0 / cur / audio_rate : 0.0;
+        }
+        left -= 1.0;
+        if (step <= 0.0) { s[i] = 0; continue; }
+        phase += step;                 /* the wave runs on across steps, as the timer's does */
         if (phase >= 1.0) phase -= (double)(int)phase;
         s[i] = (int16_t)((phase < 0.5 ? 3000 : -3000) * cfg.volume / 5);
     }
@@ -812,6 +872,7 @@ void pf_service(void)
     }
     while (now >= next_tick_at && n < 16) {
         timer_isr();
+        spk_tick();
         next_tick_at += (uint64_t)tick_len;
         n++;
     }
@@ -1118,6 +1179,7 @@ void pf_sdl_play_begin(SDL_Window *w, SDL_Renderer *r)
     SDL_RenderSetClipRect(ren, NULL);
     update_view();
     spk_div = 0;
+    SDL_AtomicSet(&spk_tail, SDL_AtomicGet(&spk_head));   /* nothing left over from last time */
     if (audio) SDL_PauseAudioDevice(audio, 0);
     embed_live = 1;
 }
