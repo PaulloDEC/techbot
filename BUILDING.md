@@ -1227,6 +1227,38 @@ folder may be upper- or lower-case; the port looks for both.
 
 ---
 
+## Release packages
+
+`.github/workflows/release.yml` builds Techbot and Shrapnel on GitHub for
+Windows (x64, Visual Studio) and Linux (x64, built on Ubuntu 22.04 so it
+runs on that and anything newer) and packages them with
+`tools/make_release.sh`.  Each package unzips straight into the player's
+game folder:
+
+| | |
+|---|---|
+| `techbot`, `shrapnel` (+ `SDL2.dll` on Windows) | the programs |
+| `widescreen/` | the widescreen art (difference files) from the repository's `widescreen` folder |
+| `PATCHES/`, `LEVELS/` | empty but for a note on what goes there (from `release/`) |
+
+- **A release:** push a tag starting with `v`, for example
+  `git tag v1.0.0` then `git push origin v1.0.0`.  When both builds finish, a
+  *draft* release with that name appears under *Releases*, with
+  `techbot-v1.0.0-windows-x64.zip`, `techbot-v1.0.0-linux-x64.tar.gz` and
+  `techbot-v1.0.0-windows-x64-symbols.zip` (`techbot.pdb`, for opening crash
+  dumps from that exact build - keep it, players don't need it) attached and
+  notes listing the commits since the last release.  Edit the notes, then
+  *Publish release*.
+- **A test build:** *Actions > Release > Run workflow* builds both and keeps
+  the packages as downloads of that run (named `dev-<commit>`), with no
+  release.
+
+The Linux programs use the system's SDL2 (`sudo apt install libsdl2-2.0-0`,
+already installed on most desktops).  To package by hand:
+`tools/make_release.sh <windows|linux> <version> <folder with the programs> [out folder]`.
+
+---
+
 ## Verification tools (optional, Linux / WSL)
 
 These compare the port with the original `DN1.EXE` running in an emulator

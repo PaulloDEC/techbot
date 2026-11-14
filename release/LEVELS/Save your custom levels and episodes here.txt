@@ -1,0 +1,15 @@
+LEVELS - custom levels and episodes for Techbot
+===============================================
+
+Put custom levels (.LEV) and episodes (.EPI) here, whether you made them
+in Shrapnel or downloaded them.
+
+  * In Techbot, choose U)ser levels on the main menu to see and play them.
+  * Each one keeps its own saved games and high scores, separate from the
+    stock episodes.
+  * Levels and episodes contain only their author's work.  The tiles,
+    actors and sounds come from your own copy of the game, so a level
+    built with Episode 2 or 3 graphics needs that episode in the game
+    folder.
+
+This folder must stay inside the game folder (the one with DN1.EXE).

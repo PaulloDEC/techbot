@@ -1,0 +1,93 @@
+# Builds Techbot and Shrapnel for Windows and Linux and packages them.
+#
+# - Push a tag such as v1.0.0  -> builds both, then publishes a GitHub
+#   Release with the packages attached.
+# - "Run workflow" on the Actions tab -> builds both and keeps the packages
+#   as downloadable artifacts of that run (no release), for testing.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write          # to create the release
+
+env:
+  SDL2_VERSION: 2.30.9
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get SDL2 (Visual C++ development package)
+        shell: pwsh
+        run: |
+          $v = $env:SDL2_VERSION
+          Invoke-WebRequest "https://github.com/libsdl-org/SDL/releases/download/release-$v/SDL2-devel-$v-VC.zip" -OutFile sdl2.zip
+          Expand-Archive sdl2.zip -DestinationPath C:\libs
+          "SDL2_DIR=C:/libs/SDL2-$v" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Configure
+        # (no -G: CMake picks the newest Visual Studio on the runner)
+        run: cmake -B build -A x64 -DCMAKE_PREFIX_PATH=${{ env.SDL2_DIR }}
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Package
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=dev-${GITHUB_SHA::7}; fi
+          bash tools/make_release.sh windows "$v" build/Release dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  linux:
+    # the oldest supported Ubuntu: a program built here runs on newer
+    # systems too (Ubuntu 22.04+, Pop!_OS 22.04+, Debian 12+, Mint 21+ ...)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools and SDL2
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake libsdl2-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Package
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=$GITHUB_REF_NAME; else v=dev-${GITHUB_SHA::7}; fi
+          bash tools/make_release.sh linux "$v" build dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: true                 # review it on GitHub, then press Publish
+          generate_release_notes: true

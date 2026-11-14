@@ -1,0 +1,20 @@
+PATCHES - level patches for Techbot
+====================================
+
+Put patch files (.PAT) here.  A patch changes levels of the stock
+episodes - a few tiles, a backdrop, the words on a note monitor - without
+touching the game's own files.
+
+  * Make patches in Shrapnel: New patch on its start screen, or
+    File > Save as a patch... for a stock level you have edited.
+  * Patches only apply in Enhanced mode.  Original mode always plays the
+    game exactly as it was.
+  * Every patch in this folder is used.  To switch one off without
+    deleting it, use Game Setup > Patches in Techbot.
+  * A patch takes effect when a level starts.
+  * If two patches change the same spot, the one whose file name comes
+    later in alphabetical order wins.
+  * A patch made for a different release of an episode is skipped;
+    TECHBOT.LOG (in the game folder) says when that happens.
+
+This folder must stay inside the game folder (the one with DN1.EXE).
