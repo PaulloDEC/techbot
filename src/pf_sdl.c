@@ -1194,14 +1194,28 @@ void pf_sdl_play_end(void)
 #endif
 
 #ifndef PF_SDL_EMBED
+/* is any episode's EXE in gamedir? */
+static int has_game_exe(void)
+{
+    int k;
+    for (k = 1; k <= 3; k++) {
+        char name[16];
+        FILE *f;
+        snprintf(name, sizeof name, "DN%d.EXE", k);
+        f = fopen(game_path(name), "rb");
+        if (f) { fclose(f); return 1; }
+    }
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
-    int scale = -1, fullscreen = -1, i, gargc = 1, ep = 0;
+    int scale = -1, fullscreen = -1, i, gargc = 1, ep = 0, dir_given = 0;
     const char *pack_arg = NULL;
     char *gargv[4] = {"dn1", 0, 0, 0};
     SDL_AudioSpec want, have;
     for (i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--dir") && i + 1 < argc) gamedir = argv[++i];
+        if (!strcmp(argv[i], "--dir") && i + 1 < argc) { gamedir = argv[++i]; dir_given = 1; }
         else if (!strcmp(argv[i], "--scale") && i + 1 < argc) scale = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--fullscreen")) fullscreen = 1;
         else if (!strcmp(argv[i], "--episode") && i + 1 < argc) ep = atoi(argv[++i]);
@@ -1214,6 +1228,23 @@ int main(int argc, char **argv)
             if (port_start_level < 0) fprintf(stderr, "techbot: %s wants %s\n", argv[i - 1], raw ? "0..20" : "1..10");
         }
         else if (gargc < 3) gargv[gargc++] = argv[i];      /* "asp", "g" switches */
+    }
+    if (!dir_given) {
+        /* no --dir: the current folder if the game is there, else Techbot's
+         * own folder (started from a file manager, the current folder is
+         * often the home folder - Linux - not the one Techbot is in) */
+        static char own[1024];
+        char *b = SDL_GetBasePath();
+        if (!has_game_exe() && b) {
+            const char *keep = gamedir;
+            size_t n;
+            snprintf(own, sizeof own, "%s", b);
+            n = strlen(own);
+            while (n > 1 && (own[n - 1] == '/' || own[n - 1] == '\\')) own[--n] = 0;
+            gamedir = own;
+            if (!has_game_exe()) gamedir = keep;
+        }
+        SDL_free(b);
     }
     cfg_defaults();
     port_log_open();

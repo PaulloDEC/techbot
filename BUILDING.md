@@ -151,7 +151,9 @@ and the `*.DN1` data files, `DN2.EXE` and `*.DN2`, or `DN3.EXE` and `*.DN3`.
 The extensions differ, so all three episodes can share one folder.  Either:
 
 * copy `techbot.exe` and `SDL2.dll` into the game folder and double-click
-  `techbot.exe` (it looks in its working directory by default), or
+  `techbot.exe` (without `--dir` it uses the current folder if the game is
+  there, otherwise the folder `techbot.exe` itself is in - so it finds the
+  game however it is started, from a file manager on Linux too), or
 * run it from anywhere and point it at the folder:
 
   ```
@@ -167,7 +169,7 @@ Options:
 
 | Option | Effect |
 |---|---|
-| `--dir <folder>` | game data folder (default: current directory) |
+| `--dir <folder>` | game data folder (default: the current folder if the game is there, else Techbot's own folder) |
 | `--episode N` | start episode 1, 2 or 3 (default: the last one chosen in *Episode select*; if that episode's EXE is missing, the first one found) |
 | `--level N` | skip the title, menu and intro and start a new game at level N (1-10) of the episode |
 | `--level-index I` | the same by the EXE's level table index (0-20: even = level, odd = the hallway after it, 20 = the demo map) |
@@ -606,7 +608,10 @@ fit (no scrollbar), from the top with a scrollbar when they don't.  When the gam
 says so (which episodes were found, and the folder's full path), with
 **Change folder...**; when it has no `DN1.EXE`, `DN2.EXE` or `DN3.EXE` (or
 while changing it) it asks for one - type or paste a path, or Browse.  A new
-folder that doesn't do keeps the one that did.
+folder that doesn't do keeps the one that did.  Without `--dir`, Shrapnel
+starts with the current folder if the game is there, else its own folder (as
+Techbot does), else the folder last chosen here (`game_folder` in
+`settings.txt`).
 
 The logo is as wide as the page's content: it is drawn from a copy enlarged a
 whole number of times with no smoothing to at least that width, then shrunk to

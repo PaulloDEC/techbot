@@ -640,6 +640,7 @@ static float side_w = SIDE_W_DEFAULT, right_w = RIGHT_W_DEFAULT;    /* (dragged 
 #define DRAWER_H_DEFAULT 240.0f
 static float drawer_hu = DRAWER_H_DEFAULT;  /* the drawer's height, at 100% (dragged taller or shorter) */
 
+static std::string saved_game_dir;          /* the game folder last chosen on the start screen */
 static void settings_save(void)
 {
     FILE *f = fopen(path_join(pref_dir(), "settings.txt").c_str(), "w");
@@ -653,13 +654,14 @@ static void settings_save(void)
     fprintf(f, "tour_seen = %d\n", tour_seen);
     fprintf(f, "tb_views = %d %d %d\n", tb_view, show_frames, show_exposed);
     fprintf(f, "start_bg = %s\n", start_bg == BG_RAIN ? "rain" : start_bg == BG_OFF ? "off" : "build");
+    if (!saved_game_dir.empty()) fprintf(f, "game_folder = %s\n", saved_game_dir.c_str());
     keys_save(f);
     fclose(f);
 }
 static void settings_load(void)
 {
     FILE *f = fopen(path_join(pref_dir(), "settings.txt").c_str(), "r");
-    char b[256];
+    char b[1200];
     if (!f) return;
     while (fgets(b, sizeof b, f))
         if (!strncmp(b, "checks", 6)) checks_manual = strstr(b, "asked") != NULL;
@@ -672,6 +674,12 @@ static void settings_load(void)
         else if (!strncmp(b, "high_contrast", 13) && strchr(b, '=')) theme_hc = atoi(strchr(b, '=') + 1) != 0;
         else if (!strncmp(b, "colour_safe", 11) && strchr(b, '=')) theme_cb = atoi(strchr(b, '=') + 1) != 0;
         else if (!strncmp(b, "animate", 7) && strchr(b, '=')) view.animate = atoi(strchr(b, '=') + 1) != 0;
+        else if (!strncmp(b, "game_folder", 11) && strchr(b, '=')) {
+            std::string v = strchr(b, '=') + 1;
+            while (!v.empty() && (v[0] == ' ' || v[0] == '\t')) v.erase(0, 1);
+            while (!v.empty() && (v.back() == '\n' || v.back() == '\r' || v.back() == ' ')) v.pop_back();
+            saved_game_dir = v;
+        }
         else if (!strncmp(b, "start_bg", 8)) start_bg = strstr(b, "rain") ? BG_RAIN : strstr(b, "off") ? BG_OFF : BG_BUILD;
         else if (!strncmp(b, "tour_seen", 9) && strchr(b, '=')) tour_seen = atoi(strchr(b, '=') + 1) != 0;
         else if (!strncmp(b, "tb_views", 8) && strchr(b, '=')) {
@@ -4255,6 +4263,26 @@ static void status_bar(float y0, float w, float h)
 }
 
 /* ================================================================ the start screen */
+static bool folder_has_game(const std::string &dir)   /* some DN1/2/3.EXE in it (without loading anything) */
+{
+    const char *keep = shrapnel_game_dir;
+    bool found = false;
+    shrapnel_game_dir = dir.c_str();
+    for (int e = 1; e <= 3 && !found; e++) {
+        char name[16];
+        snprintf(name, sizeof name, "DN%d.EXE", e);
+        if (FILE *f = fopen(game_path(name), "rb")) { fclose(f); found = true; }
+    }
+    shrapnel_game_dir = keep;
+    return found;
+}
+static std::string abs_path(const char *dir)
+{
+    std::error_code ec;
+    std::filesystem::path p = std::filesystem::absolute(std::filesystem::u8path(dir), ec);
+    return ec ? std::string(dir) : p.lexically_normal().u8string();
+}
+
 static bool try_folder(const char *dir)        /* a game folder: some DN1/2/3.EXE in it */
 {
     static std::string keep;
@@ -5127,7 +5155,12 @@ static void start_screen(float y0)
     bool asking = bad_folder || folder_edit;
     auto use_folder = [&](const char *dir) {   /* (a folder that was fine stays, if the new one isn't) */
         std::string prev = (!bad_folder && shrapnel_game_dir) ? shrapnel_game_dir : "";
-        if (try_folder(dir)) { folder_edit = false; folder_err.clear(); return; }
+        if (try_folder(dir)) {
+            folder_edit = false; folder_err.clear();
+            saved_game_dir = abs_path(dir);     /* (next time, if Shrapnel isn't in a game folder itself) */
+            settings_save();
+            return;
+        }
         folder_err = dir;
         if (!prev.empty()) try_folder(prev.c_str());
     };
@@ -5772,8 +5805,9 @@ int main(int argc, char **argv)
     const char *catalog = NULL;
     int want_ep = 1, want_slot = -1, run_selftest = 0, at_c = -1, at_r = -1, shot_at = 3, want_dos = 0, new_levels = 10;
     double want_zoom = 0;
+    bool dir_given = false;
     for (int i = 1; i < argc; i++) {
-        if (!strcmp(argv[i], "--dir") && i + 1 < argc) dir = argv[++i];
+        if (!strcmp(argv[i], "--dir") && i + 1 < argc) { dir = argv[++i]; dir_given = true; }
         else if (!strcmp(argv[i], "--episode") && i + 1 < argc) want_ep = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--level") && i + 1 < argc) want_slot = (atoi(argv[++i]) - 1) * 2;
         else if (!strcmp(argv[i], "--slot") && i + 1 < argc) want_slot = atoi(argv[++i]);
@@ -5898,7 +5932,20 @@ int main(int argc, char **argv)
     if (want_zoom > 0) view.zoom = want_zoom;
     clock_start = SDL_GetPerformanceCounter(); Uint64 last = clock_start;
     recent_load();
-    if (try_folder(dir)) {
+    std::string start_dir = dir;
+    if (!dir_given) {
+        /* no --dir: the current folder if the game is there, else Shrapnel's
+         * own folder (started from a file manager, the current folder is
+         * often the home folder - Linux), else the folder chosen last time */
+        char *b = SDL_GetBasePath();
+        std::string own = b ? b : "";
+        SDL_free(b);
+        while (own.size() > 1 && (own.back() == '/' || own.back() == '\\')) own.pop_back();
+        for (const std::string &c : { std::string("."), own, saved_game_dir })
+            if (!c.empty() && folder_has_game(c)) { start_dir = c; break; }
+        snprintf(folder_buf, sizeof folder_buf, "%s", start_dir.c_str());
+    }
+    if (try_folder(start_dir.c_str())) {
         if (open_arg) open_path(open_arg);
         else if (new_arg) new_project(want_ep, !strcmp(new_arg, "dos"), strcmp(new_arg, "level") != 0, new_levels);
         else if (want_slot >= 0)                /* --level / --slot: that level of a copy of the stock episode */
