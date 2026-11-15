@@ -4,7 +4,7 @@
 
 ## The Human Bit
 
-Techbot brings the original Duke Nukem DOS game to modern Windows with 
+Techbot brings the original Duke Nukem DOS game to modern Windows and Linux with 
 a host of optional enhancements. Play the game the classic way, or take advantage 
 of new features including:
 
