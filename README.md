@@ -1,3 +1,5 @@
+<img width="817" height="161" alt="techbot_logo_border" src="https://github.com/user-attachments/assets/8ebad9f8-7903-40cf-a098-59e1c98b9ccf" />
+
 # Techbot - An Enhanced PC Port of Duke Nukem
 
 **AI Disclosure: Pretty much the entire project was created by Claude AI. Widescreen-enhanced backdrop artwork and custom HUDs are the exception.**
@@ -18,10 +20,14 @@ of new features including:
  - Improved sound playback
  - Quicksave and Quickload
  - Support for custom levels built in Shrapnel
- 
+
+<img width="794" height="449" alt="duke_improvements" src="https://github.com/user-attachments/assets/daafa249-1587-47f8-a6c4-5528030ee3fc" />
+
 There might be more! I honestly can't remember.
 
 Then, there's also:
+
+<img width="945" height="161" alt="shrapnel_logo_outlined border" src="https://github.com/user-attachments/assets/9c021297-5988-47ae-95c3-7552182d6692" />
 
 # Shrapnel - A Modern Level Editor for Duke Nukem
 
