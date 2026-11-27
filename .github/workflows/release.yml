@@ -1,15 +1,27 @@
 # Builds Techbot and Shrapnel for Windows and Linux and packages them.
 #
-# - Push a tag such as v1.0.0  -> builds both, then publishes a GitHub
+# - Push commits to main       -> builds both and keeps the packages as
+#   downloadable artifacts of that run (no release).  Pushes that only
+#   change documentation (.md files, docs/) are skipped.
+# - Push a tag such as v1.0.0  -> builds both, then makes a draft GitHub
 #   Release with the packages attached.
-# - "Run workflow" on the Actions tab -> builds both and keeps the packages
-#   as downloadable artifacts of that run (no release), for testing.
-name: Release
+# - "Run workflow" on the Actions tab -> builds both on demand, as for a push.
+name: Build
 
 on:
   push:
+    branches: [main]
     tags: ['v*']
+    paths-ignore:              # (not applied to tags: a tag always builds)
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
+
+# a newer push to main cancels a build of main still running; a release
+# build is never cancelled
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
 
 permissions:
   contents: write          # to create the release

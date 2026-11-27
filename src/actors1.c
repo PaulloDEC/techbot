@@ -7,6 +7,7 @@
  * 500 points, "500" score sprite), touching the revealed item collects it.
  */
 #include "dn1.h"
+#include "port.h"
 
 void inventory_add(const uint8_t *gfx);   /* 108E:1FFA */
 void hint_elevator(void);                 /* 108E:0FC1 */
@@ -77,6 +78,9 @@ void act_claws(void)
         inventory_add(object_gfx + 0xB40);
         spawn_score(0x3C0, claws_x, claws_y);
         add_score(1000);
+        /* (port) the original plays no sound here - the boots, robohand and
+         * card all play 0Ch - so Enhanced mode plays it too */
+        if (cfg.mode == MODE_ENHANCED) play_sound(0x0C);
     }
 }
 
